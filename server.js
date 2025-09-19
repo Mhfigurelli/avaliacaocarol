@@ -18,18 +18,20 @@ const TOKEN = process.env.WHATSAPP_TOKEN;
 const TEMPLATE_NAME = process.env.WHATSAPP_TEMPLATE_NAME || "avaliacao_pos_consulta_v1";
 const DEFAULT_CC = process.env.DEFAULT_COUNTRY_CODE || "55";
 if (!PHONE_NUMBER_ID || !TOKEN) {
-  console.warn("⚠️ Configure PHONE_NUMBER_ID e WHATSAPP_TOKEN no .env/Render antes de iniciar.");
+  console.warn("⚠️ Configure PHONE_NUMBER_ID e WHATSAPP_TOKEN nas variáveis de ambiente antes de iniciar.");
 }
 
 // --- DB (SQLite) ---
 const db = new Database(path.join(__dirname, "jobs.db"));
 db.pragma("journal_mode = WAL");
+
+// ⚠️ Renomeamos a coluna 'to' para 'recipient'
 db.exec(`
   CREATE TABLE IF NOT EXISTS jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    to TEXT NOT NULL,
-    name TEXT NOT NULL,
-    due_at INTEGER NOT NULL,   -- epoch ms
+    recipient TEXT NOT NULL,     -- número destino (E.164 ou BR sem +)
+    name TEXT NOT NULL,          -- nome do paciente
+    due_at INTEGER NOT NULL,     -- epoch ms
     status TEXT NOT NULL DEFAULT 'pending', -- pending|sent|error
     last_error TEXT,
     sent_at INTEGER
@@ -74,15 +76,16 @@ async function sendWhatsAppTemplate({ to, name }) {
   return data;
 }
 
-// Endpoint: agenda envio (delay padrão 10 min)
+// Endpoint: agenda envio (delay padrão 10 min; permite sobrescrever delayMinutes)
 app.post("/api/send-one", async (req, res) => {
   try {
     const { to, name, delayMinutes } = req.body || {};
     if (!to || !name) return res.status(400).json({ error: "Campos obrigatórios: to, name" });
-    const delayMs = Math.max(0, Number(delayMinutes ?? 10)) * 60_000; // default 10 min
+
+    const delayMs = Math.max(0, Number(delayMinutes ?? 10)) * 60_000; // default: 10 min
     const dueAt = Date.now() + delayMs;
 
-    const stmt = db.prepare("INSERT INTO jobs (to, name, due_at) VALUES (?, ?, ?)");
+    const stmt = db.prepare("INSERT INTO jobs (recipient, name, due_at) VALUES (?, ?, ?)");
     const info = stmt.run(to, name, dueAt);
 
     return res.json({
@@ -96,22 +99,25 @@ app.post("/api/send-one", async (req, res) => {
   }
 });
 
-// (Opcional) Listar últimos jobs p/ auditoria
+// (Opcional) Listar últimos jobs
 app.get("/api/jobs", (req, res) => {
   const rows = db.prepare("SELECT * FROM jobs ORDER BY id DESC LIMIT 50").all();
   res.json(rows);
 });
 
-// Agendador: roda a cada 15s, envia vencidos
+// Agendador: roda a cada 15s, envia pendentes vencidos
 async function tick() {
   const now = Date.now();
-  const due = db.prepare("SELECT * FROM jobs WHERE status='pending' AND due_at <= ? ORDER BY id LIMIT 10").all(now);
+  const due = db
+    .prepare("SELECT * FROM jobs WHERE status='pending' AND due_at <= ? ORDER BY id LIMIT 10")
+    .all(now);
+
   for (const job of due) {
     try {
-      const resp = await sendWhatsAppTemplate({ to: job.to, name: job.name });
+      await sendWhatsAppTemplate({ to: job.recipient, name: job.name });
       db.prepare("UPDATE jobs SET status='sent', sent_at=?, last_error=NULL WHERE id=?")
         .run(Date.now(), job.id);
-      console.log(`✅ Enviado job #${job.id}`, resp?.messages?.[0]?.id || "");
+      console.log(`✅ Enviado job #${job.id}`);
     } catch (e) {
       db.prepare("UPDATE jobs SET status='error', last_error=? WHERE id=?")
         .run(String(e.message || e), job.id);
@@ -121,7 +127,7 @@ async function tick() {
 }
 setInterval(tick, 15_000);
 
-// Endpoint manual para forçar verificação (útil no Render ao “acordar”)
+// Força verificação manual (útil no Render quando o serviço acorda)
 app.get("/tick", async (_req, res) => { await tick(); res.json({ ok: true }); });
 
 app.listen(PORT, () => {
