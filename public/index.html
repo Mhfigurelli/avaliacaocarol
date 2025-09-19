@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Enviar pedido de avaliação</title>
+  <style>
+    :root { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    body { margin:0; background:#f7fafc; color:#111827; }
+    .wrap { min-height:100svh; display:grid; place-items:center; padding:24px; }
+    .card { width:100%; max-width:520px; background:#fff; border:1px solid #e5e7eb; border-radius:16px; box-shadow:0 10px 20px rgba(0,0,0,.05); }
+    .card .hd { padding:20px 24px 0; }
+    .card .bd { padding:16px 24px 24px; }
+    label { font-size:14px; font-weight:600; margin-bottom:6px; display:block; }
+    input { width:100%; padding:12px 14px; border:1px solid #e5e7eb; border-radius:10px; font-size:16px; }
+    input:focus { outline:none; border-color:#6366f1; box-shadow:0 0 0 3px rgba(99,102,241,.2); }
+    .row { display:grid; gap:10px; }
+    .hint { font-size:12px; color:#6b7280; }
+    .error { color:#b91c1c; font-size:12px; margin-top:6px; }
+    .btn { width:100%; height:44px; border:0; border-radius:12px; background:#111827; color:#fff; font-size:16px; font-weight:600; cursor:pointer; margin-top:8px; }
+    .btn:disabled { opacity:.6; cursor:not-allowed; }
+    .alert { margin-top:12px; padding:10px 12px; border-radius:12px; font-size:14px; display:none; }
+    .ok   { background:#ecfdf5; color:#065f46; border:1px solid #a7f3d0; }
+    .fail { background:#fef2f2; color:#991b1b; border:1px solid #fecaca; }
+    .badge { background:#f3f4f6; border:1px solid #e5e7eb; padding:6px 8px; border-radius:10px; font-size:12px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="hd">
+        <h1 style="font-size:22px; font-weight:700; margin:0 0 6px;">Enviar pedido de avaliação</h1>
+        <p class="hint" style="margin:0 0 16px;">Preencha os dados e clique em enviar. O pedido vai com o botão de avaliação do Google.</p>
+      </div>
+      <div class="bd">
+        <form id="f">
+          <div class="row" style="margin-bottom:12px;">
+            <label for="name">Nome do paciente</label>
+            <input id="name" placeholder="Ex.: Maria Souza" />
+            <div id="nameErr" class="error" style="display:none"></div>
+          </div>
+
+          <div class="row" style="margin-bottom:6px;">
+            <label for="phone">Telefone (Brasil)</label>
+            <input id="phone" placeholder="DDD 9XXXX-XXXX" inputmode="numeric" />
+            <div class="hint">Formato enviado: <span id="e164" class="badge">+55XXXXXXXXXX</span></div>
+            <div id="phoneErr" class="error" style="display:none"></div>
+          </div>
+
+          <button id="submit" class="btn" disabled>Enviar</button>
+          <div id="alert" class="alert"></div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const f = document.getElementById('f');
+    const nameEl = document.getElementById('name');
+    const phoneEl = document.getElementById('phone');
+    const e164El = document.getElementById('e164');
+    const btn = document.getElementById('submit');
+    const alertEl = document.getElementById('alert');
+    const nameErr = document.getElementById('nameErr');
+    const phoneErr = document.getElementById('phoneErr');
+
+    function toE164BR(v){
+      const d=v.replace(/\D/g,'').replace(/^0+/, '');
+      if(!d) return '';
+      return '+55' + d;
+    }
+
+    // ✅ Nova versão corrigida da máscara
+    function maskBR(v){
+      const d = v.replace(/\D/g, '').slice(0, 11);     // limita a 11 dígitos
+      const ddd = d.slice(0, 2);
+      const rest = d.slice(2);
+      if (!rest) return ddd;
+      if (rest.length <= 4) return `${ddd} ${rest}`;
+      if (rest.length <= 8) return `${ddd} ${rest.slice(0,4)}-${rest.slice(4)}`;
+      return `${ddd} ${rest.slice(0,5)}-${rest.slice(5)}`;
+    }
+
+    function validate(){
+      const name=nameEl.value.trim();
+      const raw=phoneEl.value; const digits=raw.replace(/\D/g,'');
+      let ok=true;
+      nameErr.style.display='none';
+      phoneErr.style.display='none';
+      if(name.length<2){ nameErr.textContent='Informe o nome.'; nameErr.style.display='block'; ok=false; }
+      if(digits.length<10||digits.length>11){ phoneErr.textContent='Use DDD + número (10 ou 11 dígitos).'; phoneErr.style.display='block'; ok=false; }
+      e164El.textContent = toE164BR(raw) || '+55XXXXXXXXXX';
+      btn.disabled=!ok;
+    }
+
+    phoneEl.addEventListener('input', (e)=>{ e.target.value = maskBR(e.target.value); validate(); });
+    nameEl.addEventListener('input', validate);
+    validate();
+
+    f.addEventListener('submit', async (ev)=>{
+      ev.preventDefault();
+      btn.disabled=true; alertEl.style.display='none';
+      const to = toE164BR(phoneEl.value);
+      const name = nameEl.value.trim();
+      try{
+        const r = await fetch('/api/send-one', {
+          method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ to, name })
+        });
+        const data = await r.json();
+        if(!r.ok) throw new Error(data?.error?.message || data?.error || 'Falha ao enviar');
+        alertEl.className='alert ok'; alertEl.textContent='Mensagem enviada com sucesso.'; alertEl.style.display='block';
+        f.reset(); validate();
+      }catch(err){
+        alertEl.className='alert fail'; alertEl.textContent=err.message || 'Erro ao enviar'; alertEl.style.display='block';
+        btn.disabled=false;
+      }
+    });
+  </script>
+</body>
+</html>
