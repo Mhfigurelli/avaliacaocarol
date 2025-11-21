@@ -53,6 +53,10 @@
     .btn:disabled { opacity:.6; cursor:not-allowed; }
     .btn.secondary { background:#6366f1; }
     .btn.secondary:hover:not(:disabled) { background:#4f46e5; }
+    .btn.success { background:#10b981; }
+    .btn.success:hover:not(:disabled) { background:#059669; }
+    .btn.danger { background:#ef4444; }
+    .btn.danger:hover:not(:disabled) { background:#dc2626; }
     
     .alert { margin-top:16px; padding:12px 14px; border-radius:12px; font-size:14px; display:none; }
     .ok   { background:#ecfdf5; color:#065f46; border:1px solid #a7f3d0; }
@@ -66,10 +70,48 @@
     .stat-box .number { font-size:24px; font-weight:700; color:#111827; }
     .stat-box .label { font-size:12px; color:#6b7280; margin-top:4px; }
     
-    .progress { width:100%; height:8px; background:#e5e7eb; border-radius:10px; overflow:hidden; margin-top:8px; }
-    .progress-bar { height:100%; background:#10b981; transition:width .3s; }
-    
     .file-name { font-size:13px; color:#374151; margin-top:8px; font-weight:500; }
+    
+    /* Preview Table */
+    .preview-section { margin-top:20px; display:none; }
+    .preview-header { 
+      display:flex; justify-content:space-between; align-items:center; 
+      padding:12px; background:#f9fafb; border-radius:8px; margin-bottom:12px;
+    }
+    .preview-header h3 { margin:0; font-size:16px; font-weight:600; }
+    .preview-count { font-size:14px; color:#6b7280; }
+    
+    .table-wrapper { 
+      max-height:400px; overflow-y:auto; border:1px solid #e5e7eb; 
+      border-radius:8px; margin-bottom:16px;
+    }
+    table { width:100%; border-collapse:collapse; }
+    thead { position:sticky; top:0; background:#f9fafb; z-index:1; }
+    th { 
+      padding:12px; text-align:left; font-size:13px; font-weight:600; 
+      border-bottom:2px solid #e5e7eb; color:#374151;
+    }
+    td { padding:12px; font-size:14px; border-bottom:1px solid #f3f4f6; }
+    tbody tr:hover { background:#f9fafb; }
+    tbody tr:last-child td { border-bottom:none; }
+    
+    .btn-group { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    
+    /* Modal */
+    .modal { 
+      display:none; position:fixed; top:0; left:0; width:100%; height:100%; 
+      background:rgba(0,0,0,0.5); z-index:1000; align-items:center; justify-content:center;
+    }
+    .modal.show { display:flex; }
+    .modal-content { 
+      background:#fff; border-radius:16px; padding:24px; max-width:500px; 
+      width:90%; margin:20px; box-shadow:0 20px 40px rgba(0,0,0,0.2);
+    }
+    .modal-header { margin-bottom:16px; }
+    .modal-header h3 { margin:0; font-size:20px; font-weight:700; }
+    .modal-body { margin-bottom:20px; color:#374151; line-height:1.6; }
+    .modal-footer { display:flex; gap:12px; }
+    .modal-footer .btn { width:auto; flex:1; }
   </style>
 </head>
 <body>
@@ -118,11 +160,42 @@
                 <div class="hint">Tempo de espera antes do envio começar</div>
               </div>
 
-              <button type="submit" class="btn secondary" id="batchBtn" disabled>
-                📤 Processar Planilha
+              <button type="button" class="btn secondary" id="previewBtn" disabled>
+                👁️ Visualizar Dados
               </button>
 
               <div id="batchAlert" class="alert"></div>
+              
+              <!-- Preview Section -->
+              <div id="previewSection" class="preview-section">
+                <div class="preview-header">
+                  <h3>📋 Prévia dos Envios</h3>
+                  <span class="preview-count" id="previewCount">0 contatos</span>
+                </div>
+                
+                <div class="table-wrapper">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>Nome</th>
+                        <th>Telefone</th>
+                      </tr>
+                    </thead>
+                    <tbody id="previewTableBody">
+                    </tbody>
+                  </table>
+                </div>
+
+                <div class="btn-group">
+                  <button type="button" class="btn danger" id="cancelBtn">
+                    ❌ Cancelar
+                  </button>
+                  <button type="submit" class="btn success" id="confirmBtn">
+                    ✅ Confirmar Envio
+                  </button>
+                </div>
+              </div>
               
               <div id="batchStats" style="display:none;">
                 <div class="stats">
@@ -184,6 +257,20 @@
             </form>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de Erro -->
+  <div id="errorModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>⚠️ Erros Encontrados</h3>
+      </div>
+      <div class="modal-body" id="errorModalBody">
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn" onclick="closeErrorModal()">Fechar</button>
       </div>
     </div>
   </div>
@@ -290,40 +377,143 @@
     const fileLabelText = document.getElementById('fileLabelText');
     const fileName = document.getElementById('fileName');
     const batchDelay = document.getElementById('batchDelay');
-    const batchBtn = document.getElementById('batchBtn');
+    const previewBtn = document.getElementById('previewBtn');
+    const confirmBtn = document.getElementById('confirmBtn');
+    const cancelBtn = document.getElementById('cancelBtn');
     const batchAlert = document.getElementById('batchAlert');
     const batchStats = document.getElementById('batchStats');
+    const previewSection = document.getElementById('previewSection');
+    const previewTableBody = document.getElementById('previewTableBody');
+    const previewCount = document.getElementById('previewCount');
+
+    let previewData = null;
 
     excelFile.addEventListener('change', (e) => {
+      previewSection.style.display = 'none';
+      batchAlert.style.display = 'none';
+      previewData = null;
+      
       if(e.target.files.length > 0) {
         const file = e.target.files[0];
         fileLabel.classList.add('has-file');
         fileLabelText.textContent = '✓ Arquivo selecionado';
         fileName.textContent = file.name;
         fileName.style.display = 'block';
-        batchBtn.disabled = false;
+        previewBtn.disabled = false;
       } else {
         fileLabel.classList.remove('has-file');
         fileLabelText.textContent = 'Selecionar arquivo';
         fileName.style.display = 'none';
-        batchBtn.disabled = true;
+        previewBtn.disabled = true;
       }
     });
 
-    batchForm.addEventListener('submit', async (ev) => {
-      ev.preventDefault();
-      
+    // Ler e mostrar preview do Excel
+    previewBtn.addEventListener('click', async () => {
       if(!excelFile.files[0]) {
         alert('Selecione um arquivo Excel');
         return;
       }
 
-      batchBtn.disabled = true;
+      previewBtn.disabled = true;
+      batchAlert.style.display = 'none';
+      
+      batchAlert.className = 'alert info';
+      batchAlert.textContent = '⏳ Lendo arquivo...';
+      batchAlert.style.display = 'block';
+
+      try {
+        // Ler o arquivo localmente usando SheetJS
+        const file = excelFile.files[0];
+        const data = await file.arrayBuffer();
+        const workbook = XLSX.read(data);
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(worksheet);
+
+        if(!jsonData || jsonData.length === 0) {
+          throw new Error('Planilha vazia ou formato inválido');
+        }
+
+        // Processar e validar dados
+        const validContacts = [];
+        const errors = [];
+
+        jsonData.forEach((row, i) => {
+          const phone = row.telefone || row.to || row.numero || row.phone || 
+                        row.Telefone || row.TO || row.Numero || row.Phone;
+          const name = row.nome || row.name || row.paciente || 
+                       row.Name || row.Nome || row.Paciente;
+          
+          if(!phone || !name) {
+            errors.push({ linha: i + 2, motivo: 'Telefone ou nome ausente' });
+          } else {
+            validContacts.push({ phone: String(phone), name: String(name) });
+          }
+        });
+
+        if(validContacts.length === 0) {
+          throw new Error('Nenhum contato válido encontrado na planilha');
+        }
+
+        // Salvar dados para envio posterior
+        previewData = validContacts;
+
+        // Montar tabela de preview
+        previewTableBody.innerHTML = validContacts.map((contact, i) => `
+          <tr>
+            <td>${i + 1}</td>
+            <td>${contact.name}</td>
+            <td>${toE164BR(contact.phone)}</td>
+          </tr>
+        `).join('');
+
+        previewCount.textContent = `${validContacts.length} contato${validContacts.length !== 1 ? 's' : ''}`;
+        previewSection.style.display = 'block';
+        
+        batchAlert.className = 'alert ok';
+        batchAlert.innerHTML = `
+          ✅ <strong>Arquivo lido com sucesso!</strong><br>
+          <small>${validContacts.length} contato(s) válido(s) encontrado(s)</small>
+          ${errors.length > 0 ? `<br><small style="color:#dc2626;">⚠️ ${errors.length} linha(s) com erro - <a href="#" onclick="showErrors(event)" style="text-decoration:underline;">ver detalhes</a></small>` : ''}
+        `;
+        batchAlert.style.display = 'block';
+
+        // Guardar erros para mostrar depois
+        window.previewErrors = errors;
+        
+      } catch(err) {
+        batchAlert.className = 'alert fail';
+        batchAlert.textContent = '❌ ' + (err.message || 'Erro ao ler arquivo');
+        batchAlert.style.display = 'block';
+        previewBtn.disabled = false;
+      }
+    });
+
+    // Cancelar preview
+    cancelBtn.addEventListener('click', () => {
+      previewSection.style.display = 'none';
+      previewData = null;
+      batchAlert.style.display = 'none';
+      previewBtn.disabled = false;
+    });
+
+    // Confirmar e enviar
+    batchForm.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      
+      if(!previewData || previewData.length === 0) {
+        alert('Nenhum dado para enviar. Clique em "Visualizar Dados" primeiro.');
+        return;
+      }
+
+      confirmBtn.disabled = true;
+      cancelBtn.disabled = true;
       batchAlert.style.display = 'none';
       batchStats.style.display = 'none';
       
       batchAlert.className = 'alert info';
-      batchAlert.textContent = '⏳ Processando planilha...';
+      batchAlert.textContent = '⏳ Processando e agendando envios...';
       batchAlert.style.display = 'block';
 
       const formData = new FormData();
@@ -347,7 +537,7 @@
         
         batchAlert.className = 'alert ok';
         batchAlert.innerHTML = `
-          ✅ <strong>Planilha processada com sucesso!</strong><br>
+          ✅ <strong>Envios agendados com sucesso!</strong><br>
           <small>Lote: ${data.batch_id}</small><br>
           <small>Envio programado para: ${new Date(data.scheduled_for).toLocaleString('pt-BR')}</small>
           ${data.errors > 0 ? `<br><small style="color:#dc2626;">⚠️ ${data.errors} linha(s) com erro</small>` : ''}
@@ -355,19 +545,53 @@
         batchAlert.style.display = 'block';
         
         // Reset form
+        previewSection.style.display = 'none';
+        previewData = null;
         batchForm.reset();
         fileLabel.classList.remove('has-file');
         fileLabelText.textContent = 'Selecionar arquivo';
         fileName.style.display = 'none';
-        batchBtn.disabled = true;
+        previewBtn.disabled = true;
         
       } catch(err) {
         batchAlert.className = 'alert fail';
         batchAlert.textContent = '❌ ' + (err.message || 'Erro ao processar');
         batchAlert.style.display = 'block';
-        batchBtn.disabled = false;
+        confirmBtn.disabled = false;
+        cancelBtn.disabled = false;
       }
     });
+
+    // Modal de erros
+    function showErrors(e) {
+      e.preventDefault();
+      const errors = window.previewErrors || [];
+      if(errors.length === 0) return;
+      
+      const modal = document.getElementById('errorModal');
+      const body = document.getElementById('errorModalBody');
+      
+      body.innerHTML = `
+        <p><strong>${errors.length} linha(s) com problema:</strong></p>
+        <ul style="margin:8px 0; padding-left:20px;">
+          ${errors.map(err => `<li>Linha ${err.linha}: ${err.motivo}</li>`).join('')}
+        </ul>
+        <p style="font-size:13px; color:#6b7280; margin-top:12px;">
+          Apenas os contatos válidos serão enviados.
+        </p>
+      `;
+      
+      modal.classList.add('show');
+    }
+
+    function closeErrorModal() {
+      document.getElementById('errorModal').classList.remove('show');
+    }
+
+    // Carregar SheetJS via CDN
+    const script = document.createElement('script');
+    script.src = 'https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js';
+    document.head.appendChild(script);
   </script>
 </body>
 </html>
