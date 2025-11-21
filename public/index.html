@@ -7,72 +7,207 @@
   <style>
     :root { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
     body { margin:0; background:#f7fafc; color:#111827; }
-    .wrap { min-height:100svh; display:grid; place-items:center; padding:24px; }
-    .card { width:100%; max-width:520px; background:#fff; border:1px solid #e5e7eb; border-radius:16px; box-shadow:0 10px 20px rgba(0,0,0,.05); }
-    .card .hd { padding:20px 24px 0; }
-    .card .bd { padding:16px 24px 24px; }
+    .wrap { min-height:100svh; padding:24px; }
+    .container { max-width:1200px; margin:0 auto; }
+    .header { text-align:center; margin-bottom:32px; }
+    .header h1 { font-size:28px; font-weight:700; margin:0 0 8px; }
+    .header p { color:#6b7280; margin:0; }
+    
+    .grid { display:grid; gap:20px; grid-template-columns:1fr; }
+    @media(min-width:768px) { .grid { grid-template-columns:1fr 1fr; } }
+    
+    .card { background:#fff; border:1px solid #e5e7eb; border-radius:16px; box-shadow:0 10px 20px rgba(0,0,0,.05); overflow:hidden; }
+    .card .hd { padding:20px 24px; border-bottom:1px solid #f3f4f6; }
+    .card .hd h2 { font-size:18px; font-weight:600; margin:0 0 4px; display:flex; align-items:center; gap:8px; }
+    .card .hd .subtitle { font-size:13px; color:#6b7280; margin:0; }
+    .card .bd { padding:24px; }
+    
+    .icon { width:20px; height:20px; }
+    
     label { font-size:14px; font-weight:600; margin-bottom:6px; display:block; }
-    input { width:100%; padding:12px 14px; border:1px solid #e5e7eb; border-radius:10px; font-size:16px; }
-    input:focus { outline:none; border-color:#6366f1; box-shadow:0 0 0 3px rgba(99,102,241,.2); }
-    .row { display:grid; gap:10px; }
+    input, select { width:100%; padding:12px 14px; border:1px solid #e5e7eb; border-radius:10px; font-size:16px; box-sizing:border-box; }
+    input:focus, select:focus { outline:none; border-color:#6366f1; box-shadow:0 0 0 3px rgba(99,102,241,.2); }
+    
+    .file-input-wrapper { position:relative; }
+    .file-input-wrapper input[type="file"] { 
+      position:absolute; width:1px; height:1px; opacity:0; overflow:hidden; 
+    }
+    .file-input-label { 
+      display:flex; align-items:center; justify-content:center; gap:8px;
+      padding:12px 14px; border:2px dashed #d1d5db; border-radius:10px; 
+      cursor:pointer; transition:all .2s; background:#fafafa;
+    }
+    .file-input-label:hover { border-color:#6366f1; background:#f5f5ff; }
+    .file-input-label.has-file { border-color:#10b981; background:#ecfdf5; }
+    
+    .row { display:grid; gap:10px; margin-bottom:16px; }
     .hint { font-size:12px; color:#6b7280; }
     .error { color:#b91c1c; font-size:12px; margin-top:6px; }
-    .btn { width:100%; height:44px; border:0; border-radius:12px; background:#111827; color:#fff; font-size:16px; font-weight:600; cursor:pointer; margin-top:8px; }
+    
+    .btn { 
+      width:100%; height:44px; border:0; border-radius:12px; 
+      background:#111827; color:#fff; font-size:16px; font-weight:600; 
+      cursor:pointer; transition:all .2s;
+    }
+    .btn:hover:not(:disabled) { background:#1f2937; transform:translateY(-1px); }
     .btn:disabled { opacity:.6; cursor:not-allowed; }
-    .alert { margin-top:12px; padding:10px 12px; border-radius:12px; font-size:14px; display:none; }
+    .btn.secondary { background:#6366f1; }
+    .btn.secondary:hover:not(:disabled) { background:#4f46e5; }
+    
+    .alert { margin-top:16px; padding:12px 14px; border-radius:12px; font-size:14px; display:none; }
     .ok   { background:#ecfdf5; color:#065f46; border:1px solid #a7f3d0; }
     .fail { background:#fef2f2; color:#991b1b; border:1px solid #fecaca; }
-    .badge { background:#f3f4f6; border:1px solid #e5e7eb; padding:6px 8px; border-radius:10px; font-size:12px; }
+    .info { background:#eff6ff; color:#1e40af; border:1px solid #bfdbfe; }
+    
+    .badge { background:#f3f4f6; border:1px solid #e5e7eb; padding:6px 8px; border-radius:10px; font-size:12px; display:inline-block; }
+    
+    .stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(100px, 1fr)); gap:12px; margin-top:16px; }
+    .stat-box { background:#f9fafb; padding:12px; border-radius:10px; text-align:center; }
+    .stat-box .number { font-size:24px; font-weight:700; color:#111827; }
+    .stat-box .label { font-size:12px; color:#6b7280; margin-top:4px; }
+    
+    .progress { width:100%; height:8px; background:#e5e7eb; border-radius:10px; overflow:hidden; margin-top:8px; }
+    .progress-bar { height:100%; background:#10b981; transition:width .3s; }
+    
+    .file-name { font-size:13px; color:#374151; margin-top:8px; font-weight:500; }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <div class="card">
-      <div class="hd">
-        <h1 style="font-size:22px; font-weight:700; margin:0 0 6px;">Enviar pedido de avaliação</h1>
-        <p class="hint" style="margin:0 0 16px;">Preencha os dados e clique em enviar. O pedido vai com o botão de avaliação do Google.</p>
+    <div class="container">
+      <div class="header">
+        <h1>📱 Sistema de Avaliações WhatsApp</h1>
+        <p>Envie pedidos de avaliação individualmente ou em lote</p>
       </div>
-      <div class="bd">
-        <form id="f">
-          <div class="row" style="margin-bottom:12px;">
-            <label for="name">Nome do paciente</label>
-            <input id="name" placeholder="Ex.: Maria Souza" />
-            <div id="nameErr" class="error" style="display:none"></div>
-          </div>
 
-          <div class="row" style="margin-bottom:6px;">
-            <label for="phone">Telefone (Brasil)</label>
-            <input id="phone" placeholder="DDD 9XXXX-XXXX" inputmode="numeric" />
-            <div class="hint">Formato enviado: <span id="e164" class="badge">+55XXXXXXXXXX</span></div>
-            <div id="phoneErr" class="error" style="display:none"></div>
+      <div class="grid">
+        <!-- Upload em Lote -->
+        <div class="card">
+          <div class="hd">
+            <h2>
+              <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+              </svg>
+              Upload em Lote
+            </h2>
+            <p class="subtitle">Envie uma planilha Excel com múltiplos pacientes</p>
           </div>
+          <div class="bd">
+            <form id="batchForm">
+              <div class="row">
+                <label>Arquivo Excel</label>
+                <div class="file-input-wrapper">
+                  <input type="file" id="excelFile" accept=".xlsx,.xls">
+                  <label for="excelFile" class="file-input-label" id="fileLabel">
+                    <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                    </svg>
+                    <span id="fileLabelText">Selecionar arquivo</span>
+                  </label>
+                  <div class="file-name" id="fileName" style="display:none;"></div>
+                </div>
+                <div class="hint">
+                  Formato: colunas <strong>telefone</strong> e <strong>nome</strong><br>
+                  Exemplo: <code>11999998888</code> | <code>João Silva</code>
+                </div>
+              </div>
 
-          <button id="submit" class="btn" disabled>Enviar</button>
-          <div id="alert" class="alert"></div>
-        </form>
+              <div class="row">
+                <label for="batchDelay">Delay para envio (minutos)</label>
+                <input type="number" id="batchDelay" value="10" min="0" max="1440">
+                <div class="hint">Tempo de espera antes do envio começar</div>
+              </div>
+
+              <button type="submit" class="btn secondary" id="batchBtn" disabled>
+                📤 Processar Planilha
+              </button>
+
+              <div id="batchAlert" class="alert"></div>
+              
+              <div id="batchStats" style="display:none;">
+                <div class="stats">
+                  <div class="stat-box">
+                    <div class="number" id="statTotal">0</div>
+                    <div class="label">Total</div>
+                  </div>
+                  <div class="stat-box">
+                    <div class="number" id="statInserted" style="color:#10b981;">0</div>
+                    <div class="label">Agendados</div>
+                  </div>
+                  <div class="stat-box">
+                    <div class="number" id="statErrors" style="color:#ef4444;">0</div>
+                    <div class="label">Erros</div>
+                  </div>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <!-- Envio Individual -->
+        <div class="card">
+          <div class="hd">
+            <h2>
+              <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+              </svg>
+              Envio Individual
+            </h2>
+            <p class="subtitle">Envie para um paciente específico</p>
+          </div>
+          <div class="bd">
+            <form id="singleForm">
+              <div class="row">
+                <label for="name">Nome do paciente</label>
+                <input id="name" placeholder="Ex.: Maria Souza" />
+                <div id="nameErr" class="error" style="display:none"></div>
+              </div>
+
+              <div class="row">
+                <label for="phone">Telefone (Brasil)</label>
+                <input id="phone" placeholder="DDD 9XXXX-XXXX" inputmode="numeric" />
+                <div class="hint">Formato enviado: <span id="e164" class="badge">+55XXXXXXXXXX</span></div>
+                <div id="phoneErr" class="error" style="display:none"></div>
+              </div>
+
+              <div class="row">
+                <label for="delay">Delay para envio (minutos)</label>
+                <input type="number" id="delay" value="10" min="0" max="1440">
+                <div class="hint">Tempo de espera antes do envio</div>
+              </div>
+
+              <button type="submit" class="btn" id="submitBtn" disabled>
+                📨 Enviar
+              </button>
+
+              <div id="singleAlert" class="alert"></div>
+            </form>
+          </div>
+        </div>
       </div>
     </div>
   </div>
 
   <script>
-    const f = document.getElementById('f');
+    // ============ ENVIO INDIVIDUAL ============
+    const singleForm = document.getElementById('singleForm');
     const nameEl = document.getElementById('name');
     const phoneEl = document.getElementById('phone');
+    const delayEl = document.getElementById('delay');
     const e164El = document.getElementById('e164');
-    const btn = document.getElementById('submit');
-    const alertEl = document.getElementById('alert');
+    const submitBtn = document.getElementById('submitBtn');
+    const singleAlert = document.getElementById('singleAlert');
     const nameErr = document.getElementById('nameErr');
     const phoneErr = document.getElementById('phoneErr');
 
     function toE164BR(v){
-      const d=v.replace(/\D/g,'').replace(/^0+/, '');
+      const d = v.replace(/\D/g,'').replace(/^0+/, '');
       if(!d) return '';
       return '+55' + d;
     }
 
-    // ✅ Nova versão corrigida da máscara
     function maskBR(v){
-      const d = v.replace(/\D/g, '').slice(0, 11);     // limita a 11 dígitos
+      const d = v.replace(/\D/g, '').slice(0, 11);
       const ddd = d.slice(0, 2);
       const rest = d.slice(2);
       if (!rest) return ddd;
@@ -81,38 +216,156 @@
       return `${ddd} ${rest.slice(0,5)}-${rest.slice(5)}`;
     }
 
-    function validate(){
-      const name=nameEl.value.trim();
-      const raw=phoneEl.value; const digits=raw.replace(/\D/g,'');
-      let ok=true;
-      nameErr.style.display='none';
-      phoneErr.style.display='none';
-      if(name.length<2){ nameErr.textContent='Informe o nome.'; nameErr.style.display='block'; ok=false; }
-      if(digits.length<10||digits.length>11){ phoneErr.textContent='Use DDD + número (10 ou 11 dígitos).'; phoneErr.style.display='block'; ok=false; }
+    function validateSingle(){
+      const name = nameEl.value.trim();
+      const raw = phoneEl.value;
+      const digits = raw.replace(/\D/g,'');
+      let ok = true;
+      
+      nameErr.style.display = 'none';
+      phoneErr.style.display = 'none';
+      
+      if(name.length < 2){ 
+        nameErr.textContent = 'Informe o nome.'; 
+        nameErr.style.display = 'block'; 
+        ok = false; 
+      }
+      
+      if(digits.length < 10 || digits.length > 11){ 
+        phoneErr.textContent = 'Use DDD + número (10 ou 11 dígitos).'; 
+        phoneErr.style.display = 'block'; 
+        ok = false; 
+      }
+      
       e164El.textContent = toE164BR(raw) || '+55XXXXXXXXXX';
-      btn.disabled=!ok;
+      submitBtn.disabled = !ok;
     }
 
-    phoneEl.addEventListener('input', (e)=>{ e.target.value = maskBR(e.target.value); validate(); });
-    nameEl.addEventListener('input', validate);
-    validate();
+    phoneEl.addEventListener('input', (e) => { 
+      e.target.value = maskBR(e.target.value); 
+      validateSingle(); 
+    });
+    nameEl.addEventListener('input', validateSingle);
+    validateSingle();
 
-    f.addEventListener('submit', async (ev)=>{
+    singleForm.addEventListener('submit', async (ev) => {
       ev.preventDefault();
-      btn.disabled=true; alertEl.style.display='none';
+      submitBtn.disabled = true;
+      singleAlert.style.display = 'none';
+      
       const to = toE164BR(phoneEl.value);
       const name = nameEl.value.trim();
-      try{
+      const delayMinutes = parseInt(delayEl.value) || 10;
+      
+      try {
         const r = await fetch('/api/send-one', {
-          method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ to, name })
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ to, name, delayMinutes })
         });
         const data = await r.json();
-        if(!r.ok) throw new Error(data?.error?.message || data?.error || 'Falha ao enviar');
-        alertEl.className='alert ok'; alertEl.textContent='Mensagem enviada com sucesso.'; alertEl.style.display='block';
-        f.reset(); validate();
-      }catch(err){
-        alertEl.className='alert fail'; alertEl.textContent=err.message || 'Erro ao enviar'; alertEl.style.display='block';
-        btn.disabled=false;
+        
+        if(!r.ok) throw new Error(data?.error || 'Falha ao enviar');
+        
+        singleAlert.className = 'alert ok';
+        singleAlert.innerHTML = `
+          ✅ <strong>Agendado com sucesso!</strong><br>
+          <small>Envio em: ${new Date(data.scheduled_for).toLocaleString('pt-BR')}</small>
+        `;
+        singleAlert.style.display = 'block';
+        singleForm.reset();
+        validateSingle();
+      } catch(err) {
+        singleAlert.className = 'alert fail';
+        singleAlert.textContent = '❌ ' + (err.message || 'Erro ao enviar');
+        singleAlert.style.display = 'block';
+        submitBtn.disabled = false;
+      }
+    });
+
+    // ============ UPLOAD EM LOTE ============
+    const batchForm = document.getElementById('batchForm');
+    const excelFile = document.getElementById('excelFile');
+    const fileLabel = document.getElementById('fileLabel');
+    const fileLabelText = document.getElementById('fileLabelText');
+    const fileName = document.getElementById('fileName');
+    const batchDelay = document.getElementById('batchDelay');
+    const batchBtn = document.getElementById('batchBtn');
+    const batchAlert = document.getElementById('batchAlert');
+    const batchStats = document.getElementById('batchStats');
+
+    excelFile.addEventListener('change', (e) => {
+      if(e.target.files.length > 0) {
+        const file = e.target.files[0];
+        fileLabel.classList.add('has-file');
+        fileLabelText.textContent = '✓ Arquivo selecionado';
+        fileName.textContent = file.name;
+        fileName.style.display = 'block';
+        batchBtn.disabled = false;
+      } else {
+        fileLabel.classList.remove('has-file');
+        fileLabelText.textContent = 'Selecionar arquivo';
+        fileName.style.display = 'none';
+        batchBtn.disabled = true;
+      }
+    });
+
+    batchForm.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      
+      if(!excelFile.files[0]) {
+        alert('Selecione um arquivo Excel');
+        return;
+      }
+
+      batchBtn.disabled = true;
+      batchAlert.style.display = 'none';
+      batchStats.style.display = 'none';
+      
+      batchAlert.className = 'alert info';
+      batchAlert.textContent = '⏳ Processando planilha...';
+      batchAlert.style.display = 'block';
+
+      const formData = new FormData();
+      formData.append('file', excelFile.files[0]);
+      formData.append('delayMinutes', batchDelay.value);
+
+      try {
+        const r = await fetch('/api/upload-excel', {
+          method: 'POST',
+          body: formData
+        });
+        const data = await r.json();
+        
+        if(!r.ok) throw new Error(data?.error || 'Falha ao processar');
+        
+        // Mostrar estatísticas
+        document.getElementById('statTotal').textContent = data.total_rows;
+        document.getElementById('statInserted').textContent = data.inserted;
+        document.getElementById('statErrors').textContent = data.errors;
+        batchStats.style.display = 'block';
+        
+        batchAlert.className = 'alert ok';
+        batchAlert.innerHTML = `
+          ✅ <strong>Planilha processada com sucesso!</strong><br>
+          <small>Lote: ${data.batch_id}</small><br>
+          <small>Envio programado para: ${new Date(data.scheduled_for).toLocaleString('pt-BR')}</small>
+          ${data.errors > 0 ? `<br><small style="color:#dc2626;">⚠️ ${data.errors} linha(s) com erro</small>` : ''}
+        `;
+        batchAlert.style.display = 'block';
+        
+        // Reset form
+        batchForm.reset();
+        fileLabel.classList.remove('has-file');
+        fileLabelText.textContent = 'Selecionar arquivo';
+        fileName.style.display = 'none';
+        batchBtn.disabled = true;
+        
+      } catch(err) {
+        batchAlert.className = 'alert fail';
+        batchAlert.textContent = '❌ ' + (err.message || 'Erro ao processar');
+        batchAlert.style.display = 'block';
+        batchBtn.disabled = false;
       }
     });
   </script>
