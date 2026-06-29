@@ -259,6 +259,29 @@ app.post("/api/appointments/:id/skip", (req, res) => {
   res.json({ ok: info.changes > 0 });
 });
 
+// Enviar vários de uma vez. Body: { ids: [1,2,3] }
+app.post("/api/appointments/send-batch", async (req, res) => {
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+  if (!ids.length) return res.status(400).json({ error: "Nenhum paciente selecionado" });
+  const results = [];
+  for (const id of ids) {
+    const row = db.prepare("SELECT * FROM appointments WHERE id=?").get(id);
+    if (!row) { results.push({ id, ok: false, error: "não encontrado" }); continue; }
+    if (row.status === "sent") { results.push({ id, ok: true, already: true }); continue; }
+    try {
+      await sendWhatsAppTemplate({ to: row.phone, name: row.name });
+      db.prepare("UPDATE appointments SET status='sent', sent_at=?, last_error=NULL, updated_at=? WHERE id=?")
+        .run(Date.now(), Date.now(), row.id);
+      results.push({ id, ok: true, name: row.name });
+    } catch (e) {
+      db.prepare("UPDATE appointments SET status='error', last_error=?, updated_at=? WHERE id=?")
+        .run(String(e.message || e), Date.now(), row.id);
+      results.push({ id, ok: false, name: row.name, error: String(e.message || e) });
+    }
+  }
+  res.json({ ok: true, sent: results.filter((r) => r.ok).length, total: ids.length, results });
+});
+
 // =====================================================================
 //  ENVIO MANUAL (fallback) — individual + planilha
 // =====================================================================

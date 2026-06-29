@@ -87,6 +87,20 @@ await post(`/api/inbound/email?token=${TOKEN}`,
 const all = await get("/api/appointments?filter=all");
 check("total de linhas = 2", all.items.length, 2);
 
+// 9) Envio em massa: 2 consultas passadas (ready) -> send-batch
+console.log("\n# 9. envio em massa (send-batch)");
+await post(`/api/inbound/email?token=${TOKEN}`,
+  mk("Você tem um novo paciente que agendou a consulta pela Doctoralia", "Pedro Antunes", "+5551970000001", "Sábado, 21 de junho de 2026 às 11:00"));
+await post(`/api/inbound/email?token=${TOKEN}`,
+  mk("Você tem um novo paciente que agendou a consulta pela Doctoralia", "Lucia Mendes", "+5551970000002", "Domingo, 22 de junho de 2026 às 15:00"));
+const ready2 = await get("/api/appointments?filter=ready");
+const batchIds = ready2.items.map(i => i.id);
+check("ready tem 2 p/ enviar", batchIds.length, 2);
+const rb = await post(`/api/appointments/send-batch`, { ids: batchIds });
+check("send-batch sent=2", rb.sent, 2);
+const ready3 = await get("/api/appointments?filter=ready");
+check("ready vazio após batch", ready3.items.length, 0);
+
 console.log(`\n${fail === 0 ? "🎉" : "⚠️"} ${pass} passou, ${fail} falhou`);
 for (const f of [DBP, DBP + "-wal", DBP + "-shm"]) { try { fs.unlinkSync(f); } catch {} }
 process.exit(fail === 0 ? 0 : 1);

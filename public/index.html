@@ -144,6 +144,15 @@
     .q-status.cancelled { background:#fef2f2; color:#991b1b; }
     .q-status.error { background:#fef2f2; color:#991b1b; }
     .q-refresh { font-size:12px; color:#6b7280; cursor:pointer; text-decoration:underline; }
+    .q-bulk {
+      display:flex; align-items:center; justify-content:space-between; gap:12px;
+      padding:10px 14px; background:#f9fafb; border:1px solid #e5e7eb;
+      border-radius:12px; margin-bottom:10px; flex-wrap:wrap;
+    }
+    .q-bulk label { display:flex; align-items:center; gap:8px; font-size:14px; font-weight:600; cursor:pointer; margin:0; }
+    .q-bulk .btn { width:auto; height:38px; padding:0 18px; font-size:14px; }
+    .q-check { width:18px; height:18px; cursor:pointer; flex-shrink:0; accent-color:#10b981; }
+    .q-item.selected { border-color:#10b981; background:#f0fdf9; }
   </style>
 </head>
 <body>
@@ -674,13 +683,64 @@
           <span class="q-status ${cls}">${statusLabel[it.status] || it.status}</span>
         </div>`;
       }
+      const check = filter === 'ready' ? `<input type="checkbox" class="q-check" data-id="${it.id}" />` : '';
       return `<div class="q-item" data-id="${it.id}">
+        ${check}
         <div class="info"><div class="pname">${it.name}</div>${meta}</div>
         <div class="q-actions">
           <button class="btn success q-send" data-id="${it.id}">✅ Enviar</button>
           <button class="btn danger q-skip" data-id="${it.id}">Pular</button>
         </div>
       </div>`;
+    }
+
+    function updateSelectionUI() {
+      const checks = [...qList.querySelectorAll('.q-check')];
+      const selected = checks.filter(c => c.checked);
+      const btn = document.getElementById('qSendSelected');
+      if (btn) {
+        btn.disabled = selected.length === 0;
+        btn.textContent = `✅ Enviar selecionados (${selected.length})`;
+      }
+      const all = document.getElementById('qSelectAll');
+      if (all) all.checked = checks.length > 0 && selected.length === checks.length;
+      checks.forEach(c => c.closest('.q-item').classList.toggle('selected', c.checked));
+    }
+
+    async function sendSelected() {
+      const ids = [...qList.querySelectorAll('.q-check:checked')].map(c => Number(c.dataset.id));
+      if (!ids.length) return;
+      if (!confirm(`Enviar o pedido de avaliação para ${ids.length} paciente(s) agora?`)) return;
+      const btn = document.getElementById('qSendSelected');
+      btn.disabled = true; btn.textContent = `Enviando ${ids.length}…`;
+      try {
+        const r = await fetch('/api/appointments/send-batch', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids })
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'falha');
+        const falhas = (d.results || []).filter(x => !x.ok);
+        if (falhas.length) {
+          alert(`Enviados ${d.sent} de ${d.total}.\n${falhas.length} falharam:\n` +
+                falhas.map(f => `• ${f.name || f.id}: ${f.error}`).join('\n'));
+        }
+        loadQueue();
+      } catch (err) {
+        btn.disabled = false; updateSelectionUI();
+        alert('Erro no envio em massa: ' + err.message);
+      }
+    }
+
+    function wireSelection() {
+      const all = document.getElementById('qSelectAll');
+      if (all) all.addEventListener('change', () => {
+        qList.querySelectorAll('.q-check').forEach(c => c.checked = all.checked);
+        updateSelectionUI();
+      });
+      const btn = document.getElementById('qSendSelected');
+      if (btn) btn.addEventListener('click', sendSelected);
+      updateSelectionUI();
     }
 
     async function loadQueue() {
@@ -695,12 +755,24 @@
           qList.innerHTML = `<div class="q-empty">${msg}</div>`;
         } else {
           qList.innerHTML = items.map(it => renderItem(it, currentFilter)).join('');
+          if (currentFilter === 'ready') {
+            qList.insertAdjacentHTML('afterbegin', `
+              <div class="q-bulk">
+                <label><input type="checkbox" id="qSelectAll" /> Selecionar todos</label>
+                <button class="btn success" id="qSendSelected" disabled>✅ Enviar selecionados (0)</button>
+              </div>`);
+            wireSelection();
+          }
         }
         loadCounts();
       } catch (e) {
         qList.innerHTML = '<div class="q-empty">Erro ao carregar a fila.</div>';
       }
     }
+
+    qList.addEventListener('change', (e) => {
+      if (e.target.classList.contains('q-check')) updateSelectionUI();
+    });
 
     qList.addEventListener('click', async (e) => {
       const sendBtn = e.target.closest('.q-send');
