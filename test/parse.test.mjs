@@ -1,4 +1,5 @@
 import { parseDoctoraliaEmail } from "../lib/parseDoctoralia.js";
+import { normalizeInbound } from "../lib/inbound.js";
 
 // Reproduz o conteúdo dos e-mails reais (prints) como chegaria no corpo.
 const agendada = {
@@ -74,6 +75,21 @@ check("type", f.type, "scheduled");
 check("name", f.name, "Maria de Souza Lima");
 check("phone", f.phone, "+5551988887777");
 check("appointmentIso", f.appointmentIso, "2026-07-13T09:30:00-03:00");
+
+console.log("\n=== Payload estilo Pipedream (from objeto, dentro de event) ===");
+const pd = normalizeInbound({
+  event: {
+    from: { text: "Doctoralia <contato@doctoralia.com.br>", value: [{ address: "contato@doctoralia.com.br" }] },
+    subject: "Você tem um novo paciente que agendou a consulta pela Doctoralia",
+    text: "Paciente\nAna Paula Reis (+5551984238462 ana@gmail.com)\nData e hora\nQuarta-feira, 1 de julho de 2026 às 16:00",
+  },
+});
+const p = parseDoctoraliaEmail(pd);
+console.log(p);
+check("from normalizado", pd.from.includes("doctoralia"), true);
+check("type", p.type, "scheduled");
+check("name", p.name, "Ana Paula Reis");
+check("phone", p.phone, "+5551984238462");
 
 console.log(`\n${fail === 0 ? "🎉" : "⚠️"} ${pass} passou, ${fail} falhou`);
 process.exit(fail === 0 ? 0 : 1);

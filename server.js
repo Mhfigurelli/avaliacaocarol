@@ -119,6 +119,16 @@ app.post("/api/inbound/email", maybeMultipart, (req, res) => {
     const email = normalizeInbound(req.body);
     const parsed = parseDoctoraliaEmail(email);
 
+    // Modo teste: ?debug=1 mostra o que foi entendido, sem gravar na fila.
+    if (req.query.debug === "1" || req.body?.debug === true) {
+      return res.json({
+        ok: true,
+        debug: true,
+        normalized: { from: email.from, subject: email.subject, has_text: !!email.text, has_html: !!email.html },
+        parsed,
+      });
+    }
+
     if (!parsed.isDoctoralia) {
       return res.json({ ok: true, ignored: "não é e-mail da Doctoralia" });
     }
