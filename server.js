@@ -165,6 +165,12 @@ app.post("/api/inbound/email", maybeMultipart, (req, res) => {
       return res.json({ ok: true, action: "cancel_no_match", phone: parsed.phone });
     }
 
+    // Só agendamento/remarcação viram item da fila. Qualquer outro tipo
+    // (código de verificação, "novas opiniões", newsletters, etc.) é ignorado.
+    if (parsed.type !== "scheduled" && parsed.type !== "rescheduled") {
+      return res.json({ ok: true, ignored: "tipo não tratado", type: parsed.type, subject: email.subject });
+    }
+
     // Agendada/remarcada: insere ou atualiza (upsert por phone+data).
     const stmt = db.prepare(`
       INSERT INTO appointments

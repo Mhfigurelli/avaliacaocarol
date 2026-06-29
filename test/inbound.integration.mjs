@@ -101,6 +101,25 @@ check("send-batch sent=2", rb.sent, 2);
 const ready3 = await get("/api/appointments?filter=ready");
 check("ready vazio após batch", ready3.items.length, 0);
 
+// 10) Outros tipos de e-mail da Doctoralia NÃO entram na fila
+console.log("\n# 10. e-mails não-agendamento são ignorados");
+const before = (await get("/api/appointments?filter=all")).items.length;
+const vcode = await post(`/api/inbound/email?token=${TOKEN}`, {
+  from: "Doctoralia <contato@doctoralia.com.br>",
+  subject: "Código de verificação do Docplanner",
+  html: "<p>Seu código de verificação é 123456</p>",
+});
+check("código de verificação ignorado", !!vcode.ignored, true);
+// pior caso: tipo desconhecido mas COM telefone no corpo -> o guard de tipo barra
+const opin = await post(`/api/inbound/email?token=${TOKEN}`, {
+  from: "Doctoralia <contato@doctoralia.com.br>",
+  subject: "Consulte as novas opiniões no seu perfil",
+  html: "<p>Você tem novas opiniões. Fulano (+5551999998888 x@y.com)</p>",
+});
+check("opiniões ignorado (tipo não tratado)", opin.ignored, "tipo não tratado");
+const after = (await get("/api/appointments?filter=all")).items.length;
+check("fila não cresceu com esses e-mails", after, before);
+
 console.log(`\n${fail === 0 ? "🎉" : "⚠️"} ${pass} passou, ${fail} falhou`);
 for (const f of [DBP, DBP + "-wal", DBP + "-shm"]) { try { fs.unlinkSync(f); } catch {} }
 process.exit(fail === 0 ? 0 : 1);
