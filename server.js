@@ -110,6 +110,15 @@ function checkInboundAuth(req) {
   return provided === INBOUND_TOKEN;
 }
 
+// GET só pra conferir no navegador que o endpoint está no ar (o real é POST).
+app.get("/api/inbound/email", (_req, res) => {
+  res.json({
+    ok: true,
+    live: true,
+    info: "Endpoint ativo. O envio real é via POST (o Pipedream faz isso). Abrir no navegador faz GET, por isso você só vê esta mensagem.",
+  });
+});
+
 // Webhook: recebe o e-mail encaminhado da Doctoralia e alimenta a fila.
 app.post("/api/inbound/email", maybeMultipart, (req, res) => {
   if (!checkInboundAuth(req)) {
