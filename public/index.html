@@ -143,6 +143,7 @@
     .q-status.skipped { background:#f3f4f6; color:#6b7280; }
     .q-status.cancelled { background:#fef2f2; color:#991b1b; }
     .q-status.error { background:#fef2f2; color:#991b1b; }
+    .q-status.archived { background:#eff6ff; color:#1e40af; }
     .q-refresh { font-size:12px; color:#6b7280; cursor:pointer; text-decoration:underline; }
     .q-bulk {
       display:flex; align-items:center; justify-content:space-between; gap:12px;
@@ -663,7 +664,7 @@
       if (!ms) return 'sem data';
       return new Date(ms).toLocaleString('pt-BR', { weekday:'short', day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
     };
-    const statusLabel = { sent:'Enviado', skipped:'Pulado', cancelled:'Cancelou', error:'Erro' };
+    const statusLabel = { sent:'Enviado', skipped:'Pulado', cancelled:'Cancelou', error:'Erro', archived:'Antiga (em dia)' };
 
     async function loadCounts() {
       try {

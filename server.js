@@ -52,6 +52,16 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
 // --- Utils ---
+// Início de hoje no fuso de Brasília (UTC-3, sem horário de verão) em ms.
+// Consultas antes disso são consideradas "antigas/em dia" (não enviar).
+function startOfTodayBR() {
+  const br = new Date(Date.now() - 3 * 3600 * 1000); // desloca p/ horário de Brasília
+  const pad = (n) => String(n).padStart(2, "0");
+  return Date.parse(
+    `${br.getUTCFullYear()}-${pad(br.getUTCMonth() + 1)}-${pad(br.getUTCDate())}T00:00:00-03:00`
+  );
+}
+
 function toE164Brazil(raw, cc = DEFAULT_CC) {
   const digits = String(raw || "").replace(/\D/g, "");
   if (!digits) return "";
@@ -171,19 +181,24 @@ app.post("/api/inbound/email", maybeMultipart, (req, res) => {
       return res.json({ ok: true, ignored: "tipo não tratado", type: parsed.type, subject: email.subject });
     }
 
+    // Consulta cuja data já passou (antes de hoje) entra como 'archived'
+    // (histórico, "em dia") — não aparece em "Prontos pra enviar".
+    const isOld = parsed.appointmentMs && parsed.appointmentMs < startOfTodayBR();
+    const initialStatus = isOld ? "archived" : "pending";
+
     // Agendada/remarcada: insere ou atualiza (upsert por phone+data).
     const stmt = db.prepare(`
       INSERT INTO appointments
         (phone, name, patient_email, appointment_at, service, professional,
          status, source, raw_subject, created_at, updated_at)
       VALUES (@phone, @name, @patient_email, @appointment_at, @service, @professional,
-         'pending', 'doctoralia_email', @raw_subject, @now, @now)
+         @status, 'doctoralia_email', @raw_subject, @now, @now)
       ON CONFLICT(phone, appointment_at) DO UPDATE SET
         name=excluded.name,
         patient_email=excluded.patient_email,
         service=excluded.service,
         professional=excluded.professional,
-        status=CASE WHEN appointments.status='cancelled' THEN 'pending' ELSE appointments.status END,
+        status=CASE WHEN appointments.status='cancelled' THEN excluded.status ELSE appointments.status END,
         updated_at=excluded.updated_at
     `);
     const info = stmt.run({
@@ -194,9 +209,15 @@ app.post("/api/inbound/email", maybeMultipart, (req, res) => {
       service: parsed.service,
       professional: parsed.professional,
       raw_subject: email.subject || null,
+      status: initialStatus,
       now,
     });
-    return res.json({ ok: true, action: "queued", type: parsed.type, id: info.lastInsertRowid });
+    return res.json({
+      ok: true,
+      action: isOld ? "archived" : "queued",
+      type: parsed.type,
+      id: info.lastInsertRowid,
+    });
   } catch (err) {
     console.error("inbound erro:", err);
     return res.status(500).json({ error: "Falha ao processar e-mail: " + err.message });
@@ -218,7 +239,7 @@ app.get("/api/appointments", (req, res) => {
     ).all(now);
   } else if (filter === "history") {
     rows = db.prepare(
-      "SELECT * FROM appointments WHERE status IN ('sent','skipped','cancelled','error') ORDER BY updated_at DESC LIMIT 100"
+      "SELECT * FROM appointments WHERE status IN ('sent','skipped','cancelled','error','archived') ORDER BY updated_at DESC LIMIT 100"
     ).all();
   } else {
     rows = db.prepare("SELECT * FROM appointments ORDER BY id DESC LIMIT 200").all();
