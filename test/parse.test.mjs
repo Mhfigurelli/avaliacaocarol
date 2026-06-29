@@ -91,5 +91,46 @@ check("type", p.type, "scheduled");
 check("name", p.name, "Ana Paula Reis");
 check("phone", p.phone, "+5551984238462");
 
+console.log("\n=== Payload REAL do Pipedream (encaminhado do Hotmail) ===");
+// Estrutura exata capturada: event = { body:{text,html}, headers:{subject,from} }
+const real = normalizeInbound({
+  headers: {
+    subject: "ENC: Nova consulta: Arthur Ferro Wenzel agendou pela Doctoralia",
+    from: { text: "Carolina Silva <carolinasilva.cs@hotmail.com>", value: [{ address: "carolinasilva.cs@hotmail.com" }] },
+  },
+  body: {
+    html: "<html><body>irrelevante</body></html>",
+    text: `Dra. Carolina Silva Figurelli
+Médica Urologista
+CREMERS 34531
+Tel: (51) 99880-0358
+________________________________
+De: Doctoralia <contato@doctoralia.com.br>
+Enviado: domingo, 28 de junho de 2026 16:41
+Para: carolinasilva.cs@hotmail.com
+Assunto: Nova consulta: Arthur Ferro Wenzel agendou pela Doctoralia
+
+Você tem um novo paciente que agendou a consulta pela Doctoralia
+Paciente
+Arthur Ferro Wenzel (+5551984238462 camilaferro07@gmail.com)
+Data e hora
+Quarta-feira, 1 de julho de 2026 às 16:00
+Serviço
+Consulta Urologia (15 min)
+Profissional
+Carolina Silva Figurelli`,
+  },
+  rawUrl: "https://pipedream-emails.s3.amazonaws.com/abc",
+});
+const rp = parseDoctoraliaEmail(real);
+console.log(rp);
+check("subject normalizado", real.subject.includes("Nova consulta"), true);
+check("text normalizado", real.text.includes("+5551984238462"), true);
+check("isDoctoralia", rp.isDoctoralia, true);
+check("type", rp.type, "scheduled");
+check("name", rp.name, "Arthur Ferro Wenzel");
+check("phone (do paciente, não da assinatura)", rp.phone, "+5551984238462");
+check("appointmentIso (consulta, não 'Enviado')", rp.appointmentIso, "2026-07-01T16:00:00-03:00");
+
 console.log(`\n${fail === 0 ? "🎉" : "⚠️"} ${pass} passou, ${fail} falhou`);
 process.exit(fail === 0 ? 0 : 1);
