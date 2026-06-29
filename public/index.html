@@ -112,6 +112,38 @@
     .modal-body { margin-bottom:20px; color:#374151; line-height:1.6; }
     .modal-footer { display:flex; gap:12px; }
     .modal-footer .btn { width:auto; flex:1; }
+
+    /* ===== Fila Doctoralia ===== */
+    .queue-card { margin-bottom:24px; }
+    .tabs { display:flex; gap:8px; flex-wrap:wrap; }
+    .tab {
+      border:1px solid #e5e7eb; background:#fff; border-radius:999px;
+      padding:8px 16px; font-size:14px; font-weight:600; cursor:pointer; color:#374151;
+    }
+    .tab.active { background:#111827; color:#fff; border-color:#111827; }
+    .tab .pill {
+      display:inline-block; min-width:20px; padding:0 6px; margin-left:6px;
+      background:#10b981; color:#fff; border-radius:999px; font-size:12px; text-align:center;
+    }
+    .tab.active .pill { background:#fff; color:#111827; }
+    .q-list { margin-top:16px; display:grid; gap:10px; }
+    .q-item {
+      display:flex; align-items:center; gap:12px; padding:14px 16px;
+      border:1px solid #e5e7eb; border-radius:12px; background:#fff;
+    }
+    .q-item .info { flex:1; min-width:0; }
+    .q-item .pname { font-weight:600; font-size:15px; }
+    .q-item .pmeta { font-size:13px; color:#6b7280; margin-top:2px; }
+    .q-item .pmeta .when { color:#374151; font-weight:500; }
+    .q-actions { display:flex; gap:8px; flex-shrink:0; }
+    .q-actions .btn { width:auto; height:38px; padding:0 16px; font-size:14px; }
+    .q-empty { text-align:center; color:#9ca3af; padding:28px 12px; font-size:14px; }
+    .q-status { font-size:12px; padding:3px 8px; border-radius:999px; font-weight:600; }
+    .q-status.sent { background:#ecfdf5; color:#065f46; }
+    .q-status.skipped { background:#f3f4f6; color:#6b7280; }
+    .q-status.cancelled { background:#fef2f2; color:#991b1b; }
+    .q-status.error { background:#fef2f2; color:#991b1b; }
+    .q-refresh { font-size:12px; color:#6b7280; cursor:pointer; text-decoration:underline; }
   </style>
 </head>
 <body>
@@ -119,7 +151,25 @@
     <div class="container">
       <div class="header">
         <h1>📱 Sistema de Avaliações WhatsApp</h1>
-        <p>Envie pedidos de avaliação individualmente ou em lote</p>
+        <p>Pacientes da Doctoralia entram aqui sozinhos — é só revisar e enviar</p>
+      </div>
+
+      <!-- ===== Fila automática (Doctoralia) ===== -->
+      <div class="card queue-card">
+        <div class="hd">
+          <h2>📥 Fila de Avaliações</h2>
+          <p class="subtitle">Pacientes que chegaram pelos e-mails da Doctoralia. <span class="q-refresh" id="qRefresh">atualizar</span></p>
+        </div>
+        <div class="bd">
+          <div class="tabs">
+            <button class="tab active" data-filter="ready">Prontos pra enviar <span class="pill" id="pillReady">0</span></button>
+            <button class="tab" data-filter="upcoming">Aguardando consulta <span class="pill" id="pillUpcoming">0</span></button>
+            <button class="tab" data-filter="history">Histórico</button>
+          </div>
+          <div class="q-list" id="qList">
+            <div class="q-empty">Carregando…</div>
+          </div>
+        </div>
       </div>
 
       <div class="grid">
@@ -587,6 +637,106 @@
     function closeErrorModal() {
       document.getElementById('errorModal').classList.remove('show');
     }
+
+    // ============ FILA DOCTORALIA ============
+    const qList = document.getElementById('qList');
+    const pillReady = document.getElementById('pillReady');
+    const pillUpcoming = document.getElementById('pillUpcoming');
+    let currentFilter = 'ready';
+
+    const fmtPhone = (p) => {
+      const d = String(p || '').replace(/\D/g, '');
+      const n = d.startsWith('55') ? d.slice(2) : d;
+      if (n.length < 10) return p;
+      return `(${n.slice(0,2)}) ${n.slice(2, n.length-4)}-${n.slice(-4)}`;
+    };
+    const fmtWhen = (ms) => {
+      if (!ms) return 'sem data';
+      return new Date(ms).toLocaleString('pt-BR', { weekday:'short', day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+    };
+    const statusLabel = { sent:'Enviado', skipped:'Pulado', cancelled:'Cancelou', error:'Erro' };
+
+    async function loadCounts() {
+      try {
+        const c = await fetch('/api/appointments/counts').then(r => r.json());
+        pillReady.textContent = c.ready;
+        pillUpcoming.textContent = c.upcoming;
+      } catch {}
+    }
+
+    function renderItem(it, filter) {
+      const when = fmtWhen(it.appointment_at);
+      const meta = `<div class="pmeta">${fmtPhone(it.phone)} · <span class="when">consulta ${when}</span></div>`;
+      if (filter === 'history') {
+        const cls = it.status || '';
+        return `<div class="q-item">
+          <div class="info"><div class="pname">${it.name}</div>${meta}</div>
+          <span class="q-status ${cls}">${statusLabel[it.status] || it.status}</span>
+        </div>`;
+      }
+      return `<div class="q-item" data-id="${it.id}">
+        <div class="info"><div class="pname">${it.name}</div>${meta}</div>
+        <div class="q-actions">
+          <button class="btn success q-send" data-id="${it.id}">✅ Enviar</button>
+          <button class="btn danger q-skip" data-id="${it.id}">Pular</button>
+        </div>
+      </div>`;
+    }
+
+    async function loadQueue() {
+      qList.innerHTML = '<div class="q-empty">Carregando…</div>';
+      try {
+        const data = await fetch(`/api/appointments?filter=${currentFilter}`).then(r => r.json());
+        const items = data.items || [];
+        if (!items.length) {
+          const msg = currentFilter === 'ready' ? 'Nenhum paciente aguardando envio agora. 🎉'
+            : currentFilter === 'upcoming' ? 'Nenhuma consulta futura na fila.'
+            : 'Sem histórico ainda.';
+          qList.innerHTML = `<div class="q-empty">${msg}</div>`;
+        } else {
+          qList.innerHTML = items.map(it => renderItem(it, currentFilter)).join('');
+        }
+        loadCounts();
+      } catch (e) {
+        qList.innerHTML = '<div class="q-empty">Erro ao carregar a fila.</div>';
+      }
+    }
+
+    qList.addEventListener('click', async (e) => {
+      const sendBtn = e.target.closest('.q-send');
+      const skipBtn = e.target.closest('.q-skip');
+      if (sendBtn) {
+        const id = sendBtn.dataset.id;
+        sendBtn.disabled = true; sendBtn.textContent = 'Enviando…';
+        try {
+          const r = await fetch(`/api/appointments/${id}/send`, { method:'POST' });
+          const d = await r.json();
+          if (!r.ok) throw new Error(d.error || 'falha');
+          loadQueue();
+        } catch (err) {
+          sendBtn.disabled = false; sendBtn.textContent = '✅ Enviar';
+          alert('Erro ao enviar: ' + err.message);
+        }
+      }
+      if (skipBtn) {
+        const id = skipBtn.dataset.id;
+        await fetch(`/api/appointments/${id}/skip`, { method:'POST' });
+        loadQueue();
+      }
+    });
+
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        currentFilter = tab.dataset.filter;
+        loadQueue();
+      });
+    });
+    document.getElementById('qRefresh').addEventListener('click', loadQueue);
+
+    loadQueue();
+    setInterval(() => { if (document.visibilityState === 'visible') loadQueue(); }, 30000);
 
     // Carregar SheetJS via CDN
     const script = document.createElement('script');
