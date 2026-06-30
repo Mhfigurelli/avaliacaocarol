@@ -17,6 +17,9 @@ process.env.PHONE_NUMBER_ID = "x";
 process.env.WHATSAPP_TOKEN = "x";
 process.env.FOLLOWUP_ENABLED = "1";
 process.env.FOLLOWUP_DELAY_HOURS = "0"; // elegível na hora (teste)
+process.env.TWO_STEP_ENABLED = "1";
+process.env.WHATSAPP_VERIFY_TOKEN = "vtok";
+process.env.REVIEW_URL = "https://example.com/review";
 
 await import("../server.js");
 await new Promise((r) => setTimeout(r, 400));
@@ -136,6 +139,33 @@ check("sent_at preservado", rrSent.sent_at, 123);
 check("followup_sent_at preservado", rrSent.followup_sent_at, 456);
 const rrPend = (await get("/api/appointments?filter=ready")).items.find((i) => i.name === "Restaurado Pend");
 check("pendente volta como 'ready'", !!rrPend, true);
+
+console.log("\n# 14. fluxo de 2 passos (webhook WhatsApp -> link)");
+// verificação (handshake)
+const vOk = await fetch(`${base}/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=vtok&hub.challenge=12345`);
+check("verify token certo -> challenge", await vOk.text(), "12345");
+check("verify token errado -> 403", (await fetch(`${base}/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=errado&hub.challenge=1`)).status, 403);
+// cria + envia (status sent), depois simula a resposta do paciente
+await post(`/api/inbound/email?token=${TOKEN}`, mk(SCHED, "Resp Test", "+5551955554444", TODAY));
+const idResp = (await get("/api/appointments?filter=ready")).items.find((i) => i.name === "Resp Test").id;
+await post(`/api/appointments/${idResp}/send`, {});
+// inbound do MESMO número (sem o 9, como a Meta às vezes manda) -> dispara o link
+const wh = (digits) => fetch(`${base}/webhooks/whatsapp`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ entry: [{ changes: [{ value: { messages: [{ from: digits, type: "text" }] } }] }] }) });
+await wh("555155554444"); // mesmo número, sem o 9 (como a Meta às vezes manda)
+await new Promise((r) => setTimeout(r, 250));
+const after1 = (await get("/api/appointments?filter=all")).items.find((i) => i.id === idResp);
+check("resposta do paciente -> link_sent_at setado", !!after1.link_sent_at, true);
+// segunda resposta não reenvia
+const ls = after1.link_sent_at;
+await wh("5551955554444");
+await new Promise((r) => setTimeout(r, 200));
+const after2 = (await get("/api/appointments?filter=all")).items.find((i) => i.id === idResp);
+check("não reenvia o link (1x só)", after2.link_sent_at, ls);
+// resposta de número desconhecido não cria/dispara nada
+const before14 = (await get("/api/appointments?filter=all")).items.length;
+await wh("5511000000000");
+await new Promise((r) => setTimeout(r, 150));
+check("desconhecido não afeta a fila", (await get("/api/appointments?filter=all")).items.length, before14);
 
 console.log(`\n${fail === 0 ? "🎉" : "⚠️"} ${pass} passou, ${fail} falhou`);
 for (const f of [DBP, DBP + "-wal", DBP + "-shm"]) { try { fs.unlinkSync(f); } catch {} }
