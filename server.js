@@ -26,6 +26,13 @@ const DEFAULT_CC = process.env.DEFAULT_COUNTRY_CODE || "55";
 const INBOUND_TOKEN = process.env.INBOUND_TOKEN || "";     // segredo do webhook
 const DRY_RUN = process.env.DRY_RUN === "1";               // não envia de verdade (teste)
 
+// Follow-up (lembrete) + rastreio de clique
+const REVIEW_URL = process.env.REVIEW_URL || "";          // link do Google Reviews (destino do redirect)
+const FOLLOWUP_TEMPLATE_NAME = process.env.FOLLOWUP_TEMPLATE_NAME || "avaliacao_followup_v1";
+const FOLLOWUP_DELAY_HOURS = Number(process.env.FOLLOWUP_DELAY_HOURS ?? 72); // 3 dias
+const FOLLOWUP_ENABLED = process.env.FOLLOWUP_ENABLED === "1"; // liga o agendador do lembrete
+const TRACK_CLICKS = process.env.TRACK_CLICKS === "1";    // 1ª msg com botão dinâmico de rastreio
+
 if (!PHONE_NUMBER_ID || !TOKEN) {
   console.warn("⚠️ Configure PHONE_NUMBER_ID e WHATSAPP_TOKEN antes de iniciar.");
 }
@@ -69,23 +76,32 @@ function toE164Brazil(raw, cc = DEFAULT_CC) {
   return `+${cc}${noLeadingZero}`;
 }
 
-async function sendWhatsAppTemplate({ to, name }) {
+// templateName: qual template usar (1ª msg ou follow-up).
+// trackId: se informado E TRACK_CLICKS ligado, adiciona o sufixo do botão
+//          dinâmico de rastreio (a 1ª mensagem usa isso; o follow-up não).
+async function sendWhatsAppTemplate({ to, name, templateName = TEMPLATE_NAME, trackId = null }) {
   const destination = to.startsWith("+") ? to : toE164Brazil(to);
   if (DRY_RUN) {
-    console.log(`🧪 [DRY_RUN] enviaria template '${TEMPLATE_NAME}' para ${destination} (${name})`);
+    console.log(`🧪 [DRY_RUN] enviaria '${templateName}' para ${destination} (${name})${trackId ? ` track=${trackId}` : ""}`);
     return { dry_run: true, to: destination };
+  }
+  const components = [
+    { type: "body", parameters: [{ type: "text", text: String(name).trim() }] },
+  ];
+  if (trackId != null && TRACK_CLICKS) {
+    // Botão URL dinâmico: o sufixo substitui {{1}} na URL base do template
+    components.push({
+      type: "button",
+      sub_type: "url",
+      index: "0",
+      parameters: [{ type: "text", text: String(trackId) }],
+    });
   }
   const payload = {
     messaging_product: "whatsapp",
     to: destination,
     type: "template",
-    template: {
-      name: TEMPLATE_NAME,
-      language: { code: "pt_BR" },
-      components: [
-        { type: "body", parameters: [{ type: "text", text: String(name).trim() }] },
-      ],
-    },
+    template: { name: templateName, language: { code: "pt_BR" }, components },
   };
   const url = `https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}/messages`;
   const r = await fetch(url, {
@@ -296,7 +312,7 @@ app.post("/api/appointments/send-batch", async (req, res) => {
     if (!row) { results.push({ id, ok: false, error: "não encontrado" }); continue; }
     if (row.status === "sent") { results.push({ id, ok: true, already: true }); continue; }
     try {
-      await sendWhatsAppTemplate({ to: row.phone, name: row.name });
+      await sendWhatsAppTemplate({ to: row.phone, name: row.name, trackId: row.id });
       db.prepare("UPDATE appointments SET status='sent', sent_at=?, last_error=NULL, updated_at=? WHERE id=?")
         .run(Date.now(), Date.now(), row.id);
       results.push({ id, ok: true, name: row.name });
@@ -407,6 +423,51 @@ async function tick() {
 }
 setInterval(tick, 15_000);
 app.get("/tick", async (_req, res) => { await tick(); res.json({ ok: true }); });
+
+// =====================================================================
+//  RASTREIO DE CLIQUE + FOLLOW-UP (lembrete)
+// =====================================================================
+
+// Botão dinâmico da 1ª mensagem aponta pra cá: registra o clique e redireciona.
+app.get("/r/:id", (req, res) => {
+  const id = Number(req.params.id);
+  if (id) {
+    db.prepare(
+      "UPDATE appointments SET clicked_at=COALESCE(clicked_at, ?), updated_at=? WHERE id=?"
+    ).run(Date.now(), Date.now(), id);
+  }
+  if (!REVIEW_URL) return res.status(200).send("Obrigado! (link de avaliação ainda não configurado)");
+  res.redirect(302, REVIEW_URL);
+});
+
+// Agendador do follow-up: lembra quem recebeu a 1ª msg há X horas e NÃO clicou.
+async function followupTick() {
+  if (!FOLLOWUP_ENABLED) return;
+  const cutoff = Date.now() - FOLLOWUP_DELAY_HOURS * 3600 * 1000;
+  const due = db
+    .prepare(`
+      SELECT * FROM appointments
+      WHERE status='sent' AND sent_at IS NOT NULL AND sent_at <= ?
+        AND clicked_at IS NULL AND followup_sent_at IS NULL
+      ORDER BY sent_at LIMIT 10
+    `)
+    .all(cutoff);
+  for (const row of due) {
+    try {
+      await sendWhatsAppTemplate({ to: row.phone, name: row.name, templateName: FOLLOWUP_TEMPLATE_NAME });
+      db.prepare("UPDATE appointments SET followup_sent_at=?, updated_at=? WHERE id=?")
+        .run(Date.now(), Date.now(), row.id);
+      console.log(`🔁 Follow-up enviado p/ #${row.id} (${row.name})`);
+    } catch (e) {
+      // marca como tentado pra não repetir em loop; registra o erro
+      db.prepare("UPDATE appointments SET followup_sent_at=?, last_error=?, updated_at=? WHERE id=?")
+        .run(Date.now(), "followup: " + String(e.message || e), Date.now(), row.id);
+      console.error(`❌ Falha follow-up #${row.id}:`, e.message || e);
+    }
+  }
+}
+setInterval(followupTick, 60_000); // a cada 1 min
+app.get("/followup-tick", async (_req, res) => { await followupTick(); res.json({ ok: true }); });
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
