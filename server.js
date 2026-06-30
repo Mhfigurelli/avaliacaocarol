@@ -11,6 +11,7 @@ import fs from "fs";
 import { db } from "./lib/db.js";
 import { parseDoctoraliaEmail } from "./lib/parseDoctoralia.js";
 import { normalizeInbound } from "./lib/inbound.js";
+import { firstName } from "./lib/util.js";
 
 dotenv.config();
 const app = express();
@@ -78,9 +79,10 @@ function toE164Brazil(raw, cc = DEFAULT_CC) {
 // template aponta direto pro Google (link limpo), sem rastreio/redirect.
 async function sendWhatsAppTemplate({ to, name, templateName = TEMPLATE_NAME }) {
   const destination = to.startsWith("+") ? to : toE164Brazil(to);
+  const greeting = firstName(name); // só o primeiro nome no cumprimento
   if (DRY_RUN) {
-    console.log(`🧪 [DRY_RUN] enviaria '${templateName}' para ${destination} (${name})`);
-    return { dry_run: true, to: destination };
+    console.log(`🧪 [DRY_RUN] enviaria '${templateName}' para ${destination} (Oi, ${greeting})`);
+    return { dry_run: true, to: destination, greeting };
   }
   const payload = {
     messaging_product: "whatsapp",
@@ -90,7 +92,7 @@ async function sendWhatsAppTemplate({ to, name, templateName = TEMPLATE_NAME }) 
       name: templateName,
       language: { code: "pt_BR" },
       components: [
-        { type: "body", parameters: [{ type: "text", text: String(name).trim() }] },
+        { type: "body", parameters: [{ type: "text", text: greeting }] },
       ],
     },
   };
