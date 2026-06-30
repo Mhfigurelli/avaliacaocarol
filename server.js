@@ -319,6 +319,59 @@ app.post("/api/appointments/send-batch", async (req, res) => {
 });
 
 // =====================================================================
+//  BACKUP/RESTORE da fila (pra preservar o estado em deploys)
+// =====================================================================
+
+// Exporta TODA a tabela appointments (estado completo), protegido por token.
+app.get("/api/admin/export", (req, res) => {
+  if (!checkInboundAuth(req)) return res.status(401).json({ error: "Token inválido" });
+  const items = db.prepare("SELECT * FROM appointments ORDER BY id").all();
+  res.json({ ok: true, count: items.length, items });
+});
+
+// Restaura linhas verbatim (status, sent_at, followup_sent_at, etc.) sem reenviar nada.
+app.post("/api/admin/restore", (req, res) => {
+  if (!checkInboundAuth(req)) return res.status(401).json({ error: "Token inválido" });
+  const rows = Array.isArray(req.body?.appointments) ? req.body.appointments : [];
+  if (!rows.length) return res.status(400).json({ error: "Nada para restaurar" });
+  const now = Date.now();
+  const stmt = db.prepare(`
+    INSERT INTO appointments
+      (phone, name, patient_email, appointment_at, service, professional,
+       status, last_error, sent_at, followup_sent_at, source, raw_subject, created_at, updated_at)
+    VALUES (@phone, @name, @patient_email, @appointment_at, @service, @professional,
+       @status, @last_error, @sent_at, @followup_sent_at, @source, @raw_subject, @created_at, @updated_at)
+    ON CONFLICT(phone, appointment_at) DO UPDATE SET
+      name=excluded.name, patient_email=excluded.patient_email, service=excluded.service,
+      professional=excluded.professional, status=excluded.status, last_error=excluded.last_error,
+      sent_at=excluded.sent_at, followup_sent_at=excluded.followup_sent_at,
+      raw_subject=excluded.raw_subject, updated_at=excluded.updated_at
+  `);
+  const tx = db.transaction((items) => {
+    for (const r of items) {
+      stmt.run({
+        phone: r.phone,
+        name: r.name,
+        patient_email: r.patient_email ?? null,
+        appointment_at: r.appointment_at ?? null,
+        service: r.service ?? null,
+        professional: r.professional ?? null,
+        status: r.status || "pending",
+        last_error: r.last_error ?? null,
+        sent_at: r.sent_at ?? null,
+        followup_sent_at: r.followup_sent_at ?? null,
+        source: r.source || "restore",
+        raw_subject: r.raw_subject ?? null,
+        created_at: r.created_at ?? now,
+        updated_at: r.updated_at ?? now,
+      });
+    }
+  });
+  tx(rows);
+  res.json({ ok: true, restored: rows.length });
+});
+
+// =====================================================================
 //  ENVIO MANUAL (fallback) — individual + planilha
 // =====================================================================
 

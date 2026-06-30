@@ -119,6 +119,24 @@ await fetch(`${base}/followup-tick`); // roda de novo
 const a2 = (await get("/api/appointments?filter=history")).items.find((i) => i.name === "Lembrar A");
 check("não reenvia follow-up (1x só)", a2.followup_sent_at, fuA);
 
+console.log("\n# 13. export/restore preserva o estado (status/datas)");
+const exp = await get(`/api/admin/export?token=${TOKEN}`);
+check("export traz itens", exp.count > 0, true);
+check("export sem token -> 401", (await fetch(`${base}/api/admin/export`)).status, 401);
+const r13 = await post(`/api/admin/restore?token=${TOKEN}`, {
+  appointments: [
+    { phone: "+5551940000001", name: "Restaurado Sent", appointment_at: 1700000000000, status: "sent", sent_at: 123, followup_sent_at: 456, created_at: 1, updated_at: 2 },
+    { phone: "+5551940000002", name: "Restaurado Pend", appointment_at: Date.now() - 3600000, status: "pending", created_at: 1, updated_at: 2 },
+  ],
+});
+check("restaurou 2", r13.restored, 2);
+const rrSent = (await get("/api/appointments?filter=history")).items.find((i) => i.name === "Restaurado Sent");
+check("status 'sent' preservado", rrSent.status, "sent");
+check("sent_at preservado", rrSent.sent_at, 123);
+check("followup_sent_at preservado", rrSent.followup_sent_at, 456);
+const rrPend = (await get("/api/appointments?filter=ready")).items.find((i) => i.name === "Restaurado Pend");
+check("pendente volta como 'ready'", !!rrPend, true);
+
 console.log(`\n${fail === 0 ? "🎉" : "⚠️"} ${pass} passou, ${fail} falhou`);
 for (const f of [DBP, DBP + "-wal", DBP + "-shm"]) { try { fs.unlinkSync(f); } catch {} }
 process.exit(fail === 0 ? 0 : 1);
