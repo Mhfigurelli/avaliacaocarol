@@ -17,7 +17,6 @@ process.env.PHONE_NUMBER_ID = "x";
 process.env.WHATSAPP_TOKEN = "x";
 process.env.FOLLOWUP_ENABLED = "1";
 process.env.FOLLOWUP_DELAY_HOURS = "0"; // elegível na hora (teste)
-process.env.REVIEW_URL = "https://example.com/review";
 
 await import("../server.js");
 await new Promise((r) => setTimeout(r, 400));
@@ -103,21 +102,22 @@ check("action archived", (await post(`/api/inbound/email?token=${TOKEN}`, mk(SCH
 check("não está em ready", (await get("/api/appointments?filter=ready")).items.find((i) => i.name === "Antiga Paciente"), undefined);
 check("está no histórico como archived", (await get("/api/appointments?filter=history")).items.find((i) => i.name === "Antiga Paciente")?.status, "archived");
 
-console.log("\n# 12. rastreio de clique + follow-up");
-await post(`/api/inbound/email?token=${TOKEN}`, mk(SCHED, "Click Sim", "+5551970001111", TODAY));
-await post(`/api/inbound/email?token=${TOKEN}`, mk(SCHED, "Click Nao", "+5551970002222", TODAY));
+console.log("\n# 12. follow-up simples (lembrete pra quem foi enviado, 1x só)");
+await post(`/api/inbound/email?token=${TOKEN}`, mk(SCHED, "Lembrar A", "+5551970001111", TODAY));
+await post(`/api/inbound/email?token=${TOKEN}`, mk(SCHED, "Lembrar B", "+5551970002222", TODAY));
 const r12 = await get("/api/appointments?filter=ready");
-const idSim = r12.items.find((i) => i.name === "Click Sim").id;
-const idNao = r12.items.find((i) => i.name === "Click Nao").id;
-await post(`/api/appointments/send-batch`, { ids: [idSim, idNao] }); // ambos enviados
-await fetch(`${base}/r/${idSim}`, { redirect: "manual" }); // "Click Sim" clica no link
-await fetch(`${base}/followup-tick`); // roda o agendador do lembrete
+const ids12 = r12.items.map((i) => i.id);
+await post(`/api/appointments/send-batch`, { ids: ids12 }); // 1ª msg enviada
+await fetch(`${base}/followup-tick`); // roda o lembrete
 const h12 = await get("/api/appointments?filter=history");
-const sim = h12.items.find((i) => i.id === idSim);
-const nao = h12.items.find((i) => i.id === idNao);
-check("quem clicou tem clicked_at", !!sim.clicked_at, true);
-check("quem clicou NÃO recebe follow-up", sim.followup_sent_at, null);
-check("quem NÃO clicou recebe follow-up", !!nao.followup_sent_at, true);
+const a = h12.items.find((i) => i.name === "Lembrar A");
+const b = h12.items.find((i) => i.name === "Lembrar B");
+check("Lembrar A recebeu follow-up", !!a.followup_sent_at, true);
+check("Lembrar B recebeu follow-up", !!b.followup_sent_at, true);
+const fuA = a.followup_sent_at;
+await fetch(`${base}/followup-tick`); // roda de novo
+const a2 = (await get("/api/appointments?filter=history")).items.find((i) => i.name === "Lembrar A");
+check("não reenvia follow-up (1x só)", a2.followup_sent_at, fuA);
 
 console.log(`\n${fail === 0 ? "🎉" : "⚠️"} ${pass} passou, ${fail} falhou`);
 for (const f of [DBP, DBP + "-wal", DBP + "-shm"]) { try { fs.unlinkSync(f); } catch {} }
