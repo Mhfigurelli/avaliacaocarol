@@ -34,6 +34,15 @@ const FOLLOWUP_TEMPLATE_NAME = process.env.FOLLOWUP_TEMPLATE_NAME || "avaliacao_
 const FOLLOWUP_DELAY_HOURS = Number(process.env.FOLLOWUP_DELAY_HOURS ?? 72); // 3 dias
 const FOLLOWUP_ENABLED = process.env.FOLLOWUP_ENABLED === "1"; // liga o agendador do lembrete
 
+// Fluxo de 2 passos: paciente responde o template -> app manda o link em TEXTO
+// (texto livre escapa do navegador interno e abre externo/logado).
+const WHATSAPP_VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || ""; // handshake do webhook Meta
+const REVIEW_URL = process.env.REVIEW_URL || "";                       // link do Google Reviews
+const TWO_STEP_ENABLED = process.env.TWO_STEP_ENABLED === "1";         // liga a resposta automática
+const STEP2_WINDOW_HOURS = Number(process.env.STEP2_WINDOW_HOURS ?? 168); // só responde a quem foi enviado nos últimos 7 dias
+const LINK_MESSAGE = process.env.LINK_MESSAGE ||
+  "Que ótimo! 🙏 É só tocar no link abaixo pra deixar sua avaliação (leva 1 minutinho):";
+
 if (!PHONE_NUMBER_ID || !TOKEN) {
   console.warn("⚠️ Configure PHONE_NUMBER_ID e WHATSAPP_TOKEN antes de iniciar.");
 }
@@ -94,6 +103,31 @@ async function sendWhatsAppTemplate({ to, name, templateName = TEMPLATE_NAME }) 
     ];
   }
   const payload = { messaging_product: "whatsapp", to: destination, type: "template", template };
+  const url = `https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}/messages`;
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data?.error?.message || JSON.stringify(data));
+  return data;
+}
+
+// Mensagem de TEXTO livre (só funciona na janela de 24h após o paciente responder).
+// preview_url:false pra não gerar aquele card de preview feio.
+async function sendWhatsAppText({ to, body }) {
+  const destination = to.startsWith("+") ? to : toE164Brazil(to);
+  if (DRY_RUN) {
+    console.log(`🧪 [DRY_RUN] texto p/ ${destination}: ${body}`);
+    return { dry_run: true, to: destination };
+  }
+  const payload = {
+    messaging_product: "whatsapp",
+    to: destination,
+    type: "text",
+    text: { preview_url: false, body },
+  };
   const url = `https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}/messages`;
   const r = await fetch(url, {
     method: "POST",
@@ -336,13 +370,13 @@ app.post("/api/admin/restore", (req, res) => {
   const stmt = db.prepare(`
     INSERT INTO appointments
       (phone, name, patient_email, appointment_at, service, professional,
-       status, last_error, sent_at, followup_sent_at, source, raw_subject, created_at, updated_at)
+       status, last_error, sent_at, followup_sent_at, link_sent_at, source, raw_subject, created_at, updated_at)
     VALUES (@phone, @name, @patient_email, @appointment_at, @service, @professional,
-       @status, @last_error, @sent_at, @followup_sent_at, @source, @raw_subject, @created_at, @updated_at)
+       @status, @last_error, @sent_at, @followup_sent_at, @link_sent_at, @source, @raw_subject, @created_at, @updated_at)
     ON CONFLICT(phone, appointment_at) DO UPDATE SET
       name=excluded.name, patient_email=excluded.patient_email, service=excluded.service,
       professional=excluded.professional, status=excluded.status, last_error=excluded.last_error,
-      sent_at=excluded.sent_at, followup_sent_at=excluded.followup_sent_at,
+      sent_at=excluded.sent_at, followup_sent_at=excluded.followup_sent_at, link_sent_at=excluded.link_sent_at,
       raw_subject=excluded.raw_subject, updated_at=excluded.updated_at
   `);
   const tx = db.transaction((items) => {
@@ -358,6 +392,7 @@ app.post("/api/admin/restore", (req, res) => {
         last_error: r.last_error ?? null,
         sent_at: r.sent_at ?? null,
         followup_sent_at: r.followup_sent_at ?? null,
+        link_sent_at: r.link_sent_at ?? null,
         source: r.source || "restore",
         raw_subject: r.raw_subject ?? null,
         created_at: r.created_at ?? now,
@@ -367,6 +402,60 @@ app.post("/api/admin/restore", (req, res) => {
   });
   tx(rows);
   res.json({ ok: true, restored: rows.length });
+});
+
+// =====================================================================
+//  FLUXO DE 2 PASSOS — webhook de entrada do WhatsApp (Meta)
+// =====================================================================
+
+// Verificação do webhook (handshake): a Meta chama com hub.challenge.
+app.get("/webhooks/whatsapp", (req, res) => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+  if (mode === "subscribe" && token && token === WHATSAPP_VERIFY_TOKEN) {
+    return res.status(200).send(challenge);
+  }
+  return res.sendStatus(403);
+});
+
+// Quando o paciente responde, manda o link em texto livre (passo 2).
+async function handleInboundReply(fromDigits) {
+  if (!TWO_STEP_ENABLED) return;
+  const last8 = String(fromDigits || "").replace(/\D/g, "").slice(-8);
+  if (!last8) return;
+  const cutoff = Date.now() - STEP2_WINDOW_HOURS * 3600 * 1000;
+  // candidatos: enviados recentemente, ainda sem link, casando pelos últimos 8 dígitos
+  const candidates = db
+    .prepare("SELECT * FROM appointments WHERE status='sent' AND link_sent_at IS NULL AND sent_at >= ? ORDER BY sent_at DESC")
+    .all(cutoff);
+  const appt = candidates.find((a) => a.phone.replace(/\D/g, "").slice(-8) === last8);
+  if (!appt) return; // resposta não corresponde a ninguém que pedimos avaliação
+  const body = REVIEW_URL ? `${LINK_MESSAGE}\n${REVIEW_URL}` : LINK_MESSAGE;
+  try {
+    await sendWhatsAppText({ to: appt.phone, body });
+    db.prepare("UPDATE appointments SET link_sent_at=?, updated_at=? WHERE id=?")
+      .run(Date.now(), Date.now(), appt.id);
+    console.log(`🔗 Link enviado (passo 2) p/ #${appt.id} (${appt.name})`);
+  } catch (e) {
+    console.error(`❌ Falha ao mandar link #${appt.id}:`, e.message || e);
+  }
+}
+
+// Recebe eventos da Meta (respostas dos pacientes).
+app.post("/webhooks/whatsapp", (req, res) => {
+  res.sendStatus(200); // confirma rápido; processa em seguida
+  try {
+    for (const entry of req.body?.entry || []) {
+      for (const ch of entry.changes || []) {
+        for (const m of ch.value?.messages || []) {
+          if (m.from) handleInboundReply(m.from); // 'from' vem só com dígitos
+        }
+      }
+    }
+  } catch (e) {
+    console.error("webhook whatsapp erro:", e);
+  }
 });
 
 // =====================================================================
