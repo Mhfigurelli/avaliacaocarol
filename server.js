@@ -11,6 +11,7 @@ import fs from "fs";
 import { db } from "./lib/db.js";
 import { parseDoctoraliaEmail } from "./lib/parseDoctoralia.js";
 import { normalizeInbound } from "./lib/inbound.js";
+import { firstName } from "./lib/util.js";
 
 dotenv.config();
 const app = express();
@@ -25,6 +26,11 @@ const TEMPLATE_NAME = process.env.WHATSAPP_TEMPLATE_NAME || "avaliacao_pos_consu
 const DEFAULT_CC = process.env.DEFAULT_COUNTRY_CODE || "55";
 const INBOUND_TOKEN = process.env.INBOUND_TOKEN || "";     // segredo do webhook
 const DRY_RUN = process.env.DRY_RUN === "1";               // não envia de verdade (teste)
+
+// Follow-up (lembrete) — vai pra todos que receberam a 1ª msg, 1x só
+const FOLLOWUP_TEMPLATE_NAME = process.env.FOLLOWUP_TEMPLATE_NAME || "avaliacao_followup_v1";
+const FOLLOWUP_DELAY_HOURS = Number(process.env.FOLLOWUP_DELAY_HOURS ?? 72); // 3 dias
+const FOLLOWUP_ENABLED = process.env.FOLLOWUP_ENABLED === "1"; // liga o agendador do lembrete
 
 if (!PHONE_NUMBER_ID || !TOKEN) {
   console.warn("⚠️ Configure PHONE_NUMBER_ID e WHATSAPP_TOKEN antes de iniciar.");
@@ -69,21 +75,24 @@ function toE164Brazil(raw, cc = DEFAULT_CC) {
   return `+${cc}${noLeadingZero}`;
 }
 
-async function sendWhatsAppTemplate({ to, name }) {
+// templateName: qual template usar (1ª msg ou follow-up). O botão de cada
+// template aponta direto pro Google (link limpo), sem rastreio/redirect.
+async function sendWhatsAppTemplate({ to, name, templateName = TEMPLATE_NAME }) {
   const destination = to.startsWith("+") ? to : toE164Brazil(to);
+  const greeting = firstName(name); // só o primeiro nome no cumprimento
   if (DRY_RUN) {
-    console.log(`🧪 [DRY_RUN] enviaria template '${TEMPLATE_NAME}' para ${destination} (${name})`);
-    return { dry_run: true, to: destination };
+    console.log(`🧪 [DRY_RUN] enviaria '${templateName}' para ${destination} (Oi, ${greeting})`);
+    return { dry_run: true, to: destination, greeting };
   }
   const payload = {
     messaging_product: "whatsapp",
     to: destination,
     type: "template",
     template: {
-      name: TEMPLATE_NAME,
+      name: templateName,
       language: { code: "pt_BR" },
       components: [
-        { type: "body", parameters: [{ type: "text", text: String(name).trim() }] },
+        { type: "body", parameters: [{ type: "text", text: greeting }] },
       ],
     },
   };
@@ -310,6 +319,59 @@ app.post("/api/appointments/send-batch", async (req, res) => {
 });
 
 // =====================================================================
+//  BACKUP/RESTORE da fila (pra preservar o estado em deploys)
+// =====================================================================
+
+// Exporta TODA a tabela appointments (estado completo), protegido por token.
+app.get("/api/admin/export", (req, res) => {
+  if (!checkInboundAuth(req)) return res.status(401).json({ error: "Token inválido" });
+  const items = db.prepare("SELECT * FROM appointments ORDER BY id").all();
+  res.json({ ok: true, count: items.length, items });
+});
+
+// Restaura linhas verbatim (status, sent_at, followup_sent_at, etc.) sem reenviar nada.
+app.post("/api/admin/restore", (req, res) => {
+  if (!checkInboundAuth(req)) return res.status(401).json({ error: "Token inválido" });
+  const rows = Array.isArray(req.body?.appointments) ? req.body.appointments : [];
+  if (!rows.length) return res.status(400).json({ error: "Nada para restaurar" });
+  const now = Date.now();
+  const stmt = db.prepare(`
+    INSERT INTO appointments
+      (phone, name, patient_email, appointment_at, service, professional,
+       status, last_error, sent_at, followup_sent_at, source, raw_subject, created_at, updated_at)
+    VALUES (@phone, @name, @patient_email, @appointment_at, @service, @professional,
+       @status, @last_error, @sent_at, @followup_sent_at, @source, @raw_subject, @created_at, @updated_at)
+    ON CONFLICT(phone, appointment_at) DO UPDATE SET
+      name=excluded.name, patient_email=excluded.patient_email, service=excluded.service,
+      professional=excluded.professional, status=excluded.status, last_error=excluded.last_error,
+      sent_at=excluded.sent_at, followup_sent_at=excluded.followup_sent_at,
+      raw_subject=excluded.raw_subject, updated_at=excluded.updated_at
+  `);
+  const tx = db.transaction((items) => {
+    for (const r of items) {
+      stmt.run({
+        phone: r.phone,
+        name: r.name,
+        patient_email: r.patient_email ?? null,
+        appointment_at: r.appointment_at ?? null,
+        service: r.service ?? null,
+        professional: r.professional ?? null,
+        status: r.status || "pending",
+        last_error: r.last_error ?? null,
+        sent_at: r.sent_at ?? null,
+        followup_sent_at: r.followup_sent_at ?? null,
+        source: r.source || "restore",
+        raw_subject: r.raw_subject ?? null,
+        created_at: r.created_at ?? now,
+        updated_at: r.updated_at ?? now,
+      });
+    }
+  });
+  tx(rows);
+  res.json({ ok: true, restored: rows.length });
+});
+
+// =====================================================================
 //  ENVIO MANUAL (fallback) — individual + planilha
 // =====================================================================
 
@@ -407,6 +469,39 @@ async function tick() {
 }
 setInterval(tick, 15_000);
 app.get("/tick", async (_req, res) => { await tick(); res.json({ ok: true }); });
+
+// =====================================================================
+//  FOLLOW-UP (lembrete) — vai pra todos que receberam a 1ª msg, 1x só
+// =====================================================================
+
+// Agendador: lembra quem recebeu a 1ª msg há X horas e ainda não recebeu lembrete.
+async function followupTick() {
+  if (!FOLLOWUP_ENABLED) return;
+  const cutoff = Date.now() - FOLLOWUP_DELAY_HOURS * 3600 * 1000;
+  const due = db
+    .prepare(`
+      SELECT * FROM appointments
+      WHERE status='sent' AND sent_at IS NOT NULL AND sent_at <= ?
+        AND followup_sent_at IS NULL
+      ORDER BY sent_at LIMIT 10
+    `)
+    .all(cutoff);
+  for (const row of due) {
+    try {
+      await sendWhatsAppTemplate({ to: row.phone, name: row.name, templateName: FOLLOWUP_TEMPLATE_NAME });
+      db.prepare("UPDATE appointments SET followup_sent_at=?, updated_at=? WHERE id=?")
+        .run(Date.now(), Date.now(), row.id);
+      console.log(`🔁 Follow-up enviado p/ #${row.id} (${row.name})`);
+    } catch (e) {
+      // marca como tentado pra não repetir em loop; registra o erro
+      db.prepare("UPDATE appointments SET followup_sent_at=?, last_error=?, updated_at=? WHERE id=?")
+        .run(Date.now(), "followup: " + String(e.message || e), Date.now(), row.id);
+      console.error(`❌ Falha follow-up #${row.id}:`, e.message || e);
+    }
+  }
+}
+setInterval(followupTick, 60_000); // a cada 1 min
+app.get("/followup-tick", async (_req, res) => { await followupTick(); res.json({ ok: true }); });
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 

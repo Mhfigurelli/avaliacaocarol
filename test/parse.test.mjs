@@ -1,5 +1,6 @@
 import { parseDoctoraliaEmail } from "../lib/parseDoctoralia.js";
 import { normalizeInbound } from "../lib/inbound.js";
+import { firstName } from "../lib/util.js";
 
 // Reproduz o conteúdo dos e-mails reais (prints) como chegaria no corpo.
 const agendada = {
@@ -131,6 +132,12 @@ check("type", rp.type, "scheduled");
 check("name", rp.name, "Arthur Ferro Wenzel");
 check("phone (do paciente, não da assinatura)", rp.phone, "+5551984238462");
 check("appointmentIso (consulta, não 'Enviado')", rp.appointmentIso, "2026-07-01T16:00:00-03:00");
+
+console.log("\n=== firstName (cumprimento só com primeiro nome) ===");
+check("nome completo", firstName("Eleci Amoedo Gonçalves"), "Eleci");
+check("com tag de convênio", firstName("Sergio Luis Alves Campos- Ipê"), "Sergio");
+check("nome simples", firstName("Marcelo"), "Marcelo");
+check("espaços extras", firstName("  Ana  Paula "), "Ana");
 
 console.log(`\n${fail === 0 ? "🎉" : "⚠️"} ${pass} passou, ${fail} falhou`);
 process.exit(fail === 0 ? 0 : 1);
