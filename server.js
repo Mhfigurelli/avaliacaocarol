@@ -24,6 +24,8 @@ const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const TOKEN = process.env.WHATSAPP_TOKEN;
 const TEMPLATE_NAME = process.env.WHATSAPP_TEMPLATE_NAME || "avaliacao_pos_consulta_v1";
 const DEFAULT_CC = process.env.DEFAULT_COUNTRY_CODE || "55";
+// Template tem variável {{1}} (nome)? "0" = sem personalização (manda 0 parâmetros).
+const TEMPLATE_HAS_NAME = (process.env.TEMPLATE_HAS_NAME ?? "1") !== "0";
 const INBOUND_TOKEN = process.env.INBOUND_TOKEN || "";     // segredo do webhook
 const DRY_RUN = process.env.DRY_RUN === "1";               // não envia de verdade (teste)
 
@@ -84,18 +86,14 @@ async function sendWhatsAppTemplate({ to, name, templateName = TEMPLATE_NAME }) 
     console.log(`🧪 [DRY_RUN] enviaria '${templateName}' para ${destination} (Oi, ${greeting})`);
     return { dry_run: true, to: destination, greeting };
   }
-  const payload = {
-    messaging_product: "whatsapp",
-    to: destination,
-    type: "template",
-    template: {
-      name: templateName,
-      language: { code: "pt_BR" },
-      components: [
-        { type: "body", parameters: [{ type: "text", text: greeting }] },
-      ],
-    },
-  };
+  const template = { name: templateName, language: { code: "pt_BR" } };
+  // Só inclui o parâmetro do nome se o template tiver a variável {{1}}.
+  if (TEMPLATE_HAS_NAME) {
+    template.components = [
+      { type: "body", parameters: [{ type: "text", text: greeting }] },
+    ];
+  }
+  const payload = { messaging_product: "whatsapp", to: destination, type: "template", template };
   const url = `https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}/messages`;
   const r = await fetch(url, {
     method: "POST",
