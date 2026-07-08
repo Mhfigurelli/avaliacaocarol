@@ -43,6 +43,13 @@ const STEP2_WINDOW_HOURS = Number(process.env.STEP2_WINDOW_HOURS ?? 168); // só
 const LINK_MESSAGE = process.env.LINK_MESSAGE ||
   "Que ótimo! 🙏 É só tocar no link abaixo pra deixar sua avaliação (leva 1 minutinho):";
 
+// Pesquisa de origem ("como você conheceu a Dra.?") — perguntada após o link
+const SOURCE_SURVEY_ENABLED = process.env.SOURCE_SURVEY_ENABLED === "1";
+const SOURCE_OPTIONS = (process.env.SOURCE_OPTIONS || "Google,Indicação,Doctoralia")
+  .split(",").map((s) => s.trim()).filter(Boolean).slice(0, 3); // WhatsApp: até 3 botões
+const SOURCE_QUESTION = process.env.SOURCE_QUESTION ||
+  "Ah, e pra gente melhorar 🙏 Como você conheceu a Dra. Carolina?";
+
 if (!PHONE_NUMBER_ID || !TOKEN) {
   console.warn("⚠️ Configure PHONE_NUMBER_ID e WHATSAPP_TOKEN antes de iniciar.");
 }
@@ -127,6 +134,34 @@ async function sendWhatsAppText({ to, body }) {
     to: destination,
     type: "text",
     text: { preview_url: false, body },
+  };
+  const url = `https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}/messages`;
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data?.error?.message || JSON.stringify(data));
+  return data;
+}
+
+// Mensagem interativa com botões de resposta (até 3). Usada na pesquisa de origem.
+async function sendWhatsAppButtons({ to, body, buttons }) {
+  const destination = to.startsWith("+") ? to : toE164Brazil(to);
+  if (DRY_RUN) {
+    console.log(`🧪 [DRY_RUN] botões p/ ${destination}: ${body} [${buttons.map((b) => b.title).join(", ")}]`);
+    return { dry_run: true, to: destination };
+  }
+  const payload = {
+    messaging_product: "whatsapp",
+    to: destination,
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text: body },
+      action: { buttons: buttons.map((b) => ({ type: "reply", reply: { id: b.id, title: b.title } })) },
+    },
   };
   const url = `https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}/messages`;
   const r = await fetch(url, {
@@ -370,14 +405,14 @@ app.post("/api/admin/restore", (req, res) => {
   const stmt = db.prepare(`
     INSERT INTO appointments
       (phone, name, patient_email, appointment_at, service, professional,
-       status, last_error, sent_at, followup_sent_at, link_sent_at, source, raw_subject, created_at, updated_at)
+       status, last_error, sent_at, followup_sent_at, link_sent_at, source_answer, source, raw_subject, created_at, updated_at)
     VALUES (@phone, @name, @patient_email, @appointment_at, @service, @professional,
-       @status, @last_error, @sent_at, @followup_sent_at, @link_sent_at, @source, @raw_subject, @created_at, @updated_at)
+       @status, @last_error, @sent_at, @followup_sent_at, @link_sent_at, @source_answer, @source, @raw_subject, @created_at, @updated_at)
     ON CONFLICT(phone, appointment_at) DO UPDATE SET
       name=excluded.name, patient_email=excluded.patient_email, service=excluded.service,
       professional=excluded.professional, status=excluded.status, last_error=excluded.last_error,
       sent_at=excluded.sent_at, followup_sent_at=excluded.followup_sent_at, link_sent_at=excluded.link_sent_at,
-      raw_subject=excluded.raw_subject, updated_at=excluded.updated_at
+      source_answer=excluded.source_answer, raw_subject=excluded.raw_subject, updated_at=excluded.updated_at
   `);
   const tx = db.transaction((items) => {
     for (const r of items) {
@@ -393,6 +428,7 @@ app.post("/api/admin/restore", (req, res) => {
         sent_at: r.sent_at ?? null,
         followup_sent_at: r.followup_sent_at ?? null,
         link_sent_at: r.link_sent_at ?? null,
+        source_answer: r.source_answer ?? null,
         source: r.source || "restore",
         raw_subject: r.raw_subject ?? null,
         created_at: r.created_at ?? now,
@@ -437,9 +473,31 @@ async function handleInboundReply(fromDigits) {
     db.prepare("UPDATE appointments SET link_sent_at=?, updated_at=? WHERE id=?")
       .run(Date.now(), Date.now(), appt.id);
     console.log(`🔗 Link enviado (passo 2) p/ #${appt.id} (${appt.name})`);
+    // pesquisa de origem: pergunta logo após o link (se ligada e ainda sem resposta)
+    if (SOURCE_SURVEY_ENABLED && SOURCE_OPTIONS.length && !appt.source_answer) {
+      const buttons = SOURCE_OPTIONS.map((title, i) => ({ id: `src_${i}`, title }));
+      await sendWhatsAppButtons({ to: appt.phone, body: SOURCE_QUESTION, buttons });
+    }
   } catch (e) {
     console.error(`❌ Falha ao mandar link #${appt.id}:`, e.message || e);
   }
+}
+
+// Registra a resposta da pesquisa de origem no paciente correspondente.
+function recordSource(fromDigits, buttonId, buttonTitle) {
+  const idx = Number(String(buttonId).replace("src_", ""));
+  const source = SOURCE_OPTIONS[idx] || buttonTitle || null;
+  if (!source) return;
+  const last8 = String(fromDigits || "").replace(/\D/g, "").slice(-8);
+  const cutoff = Date.now() - STEP2_WINDOW_HOURS * 3600 * 1000;
+  const candidates = db
+    .prepare("SELECT * FROM appointments WHERE sent_at >= ? AND source_answer IS NULL ORDER BY sent_at DESC")
+    .all(cutoff);
+  const appt = candidates.find((a) => a.phone.replace(/\D/g, "").slice(-8) === last8);
+  if (!appt) return;
+  db.prepare("UPDATE appointments SET source_answer=?, updated_at=? WHERE id=?")
+    .run(source, Date.now(), appt.id);
+  console.log(`📊 Origem registrada p/ #${appt.id} (${appt.name}): ${source}`);
 }
 
 // Recebe eventos da Meta (respostas dos pacientes).
@@ -449,13 +507,30 @@ app.post("/webhooks/whatsapp", (req, res) => {
     for (const entry of req.body?.entry || []) {
       for (const ch of entry.changes || []) {
         for (const m of ch.value?.messages || []) {
-          if (m.from) handleInboundReply(m.from); // 'from' vem só com dígitos
+          if (!m.from) continue;
+          const br = m.interactive?.button_reply;
+          if (br && String(br.id).startsWith("src_")) {
+            recordSource(m.from, br.id, br.title); // resposta da pesquisa de origem
+          } else {
+            handleInboundReply(m.from); // engajamento inicial -> link (+ pergunta de origem)
+          }
         }
       }
     }
   } catch (e) {
     console.error("webhook whatsapp erro:", e);
   }
+});
+
+// Estatísticas da pesquisa de origem (pro painel do app).
+app.get("/api/source-stats", (_req, res) => {
+  const rows = db
+    .prepare("SELECT source_answer AS source, COUNT(*) AS n FROM appointments WHERE source_answer IS NOT NULL GROUP BY source_answer ORDER BY n DESC")
+    .all();
+  const answered = rows.reduce((s, r) => s + r.n, 0);
+  // total que engajou (recebeu o link) = universo de quem PODERIA responder
+  const engaged = db.prepare("SELECT COUNT(*) c FROM appointments WHERE link_sent_at IS NOT NULL").get().c;
+  res.json({ answered, engaged, no_answer: Math.max(0, engaged - answered), breakdown: rows });
 });
 
 // =====================================================================

@@ -20,6 +20,8 @@ process.env.FOLLOWUP_DELAY_HOURS = "0"; // elegível na hora (teste)
 process.env.TWO_STEP_ENABLED = "1";
 process.env.WHATSAPP_VERIFY_TOKEN = "vtok";
 process.env.REVIEW_URL = "https://example.com/review";
+process.env.SOURCE_SURVEY_ENABLED = "1";
+process.env.SOURCE_OPTIONS = "Google,Indicação,Doctoralia";
 
 await import("../server.js");
 await new Promise((r) => setTimeout(r, 400));
@@ -166,6 +168,22 @@ const before14 = (await get("/api/appointments?filter=all")).items.length;
 await wh("5511000000000");
 await new Promise((r) => setTimeout(r, 150));
 check("desconhecido não afeta a fila", (await get("/api/appointments?filter=all")).items.length, before14);
+
+console.log("\n# 15. pesquisa de origem (botões -> source_answer)");
+await post(`/api/inbound/email?token=${TOKEN}`, mk(SCHED, "Origem Test", "+5551944443333", TODAY));
+const idOrg = (await get("/api/appointments?filter=ready")).items.find((i) => i.name === "Origem Test").id;
+await post(`/api/appointments/${idOrg}/send`, {});
+// 1) paciente engaja (envia o link + a pergunta de origem)
+await wh("5551944443333");
+await new Promise((r) => setTimeout(r, 200));
+// 2) paciente toca no botão "Google" (src_0)
+await fetch(`${base}/webhooks/whatsapp`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ entry: [{ changes: [{ value: { messages: [{ from: "5551944443333", type: "interactive", interactive: { button_reply: { id: "src_0", title: "Google" } } }] } }] }] }) });
+await new Promise((r) => setTimeout(r, 200));
+const org = (await get("/api/appointments?filter=all")).items.find((i) => i.id === idOrg);
+check("origem registrada = Google", org.source_answer, "Google");
+const stats = await get("/api/source-stats");
+check("stats: 1 respondeu", stats.answered, 1);
+check("stats: breakdown Google=1", stats.breakdown.find((b) => b.source === "Google")?.n, 1);
 
 console.log(`\n${fail === 0 ? "🎉" : "⚠️"} ${pass} passou, ${fail} falhou`);
 for (const f of [DBP, DBP + "-wal", DBP + "-shm"]) { try { fs.unlinkSync(f); } catch {} }
