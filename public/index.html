@@ -154,6 +154,13 @@
     .q-bulk .btn { width:auto; height:38px; padding:0 18px; font-size:14px; }
     .q-check { width:18px; height:18px; cursor:pointer; flex-shrink:0; accent-color:#10b981; }
     .q-item.selected { border-color:#10b981; background:#f0fdf9; }
+    .src-row { margin-bottom:14px; }
+    .src-row .src-top { display:flex; justify-content:space-between; font-size:14px; margin-bottom:6px; }
+    .src-row .src-top .src-name { font-weight:600; color:#111827; }
+    .src-row .src-top .src-val { color:#6b7280; }
+    .src-bar { height:12px; border-radius:999px; background:#eef2f7; overflow:hidden; }
+    .src-bar > span { display:block; height:100%; border-radius:999px; background:#6366f1; }
+    .src-total { font-size:13px; color:#6b7280; margin-top:14px; }
   </style>
 </head>
 <body>
@@ -179,6 +186,17 @@
           <div class="q-list" id="qList">
             <div class="q-empty">Carregando…</div>
           </div>
+        </div>
+      </div>
+
+      <!-- ===== Pesquisa de origem ===== -->
+      <div class="card queue-card" id="sourceCard" style="display:none;">
+        <div class="hd">
+          <h2>📊 Origem dos pacientes</h2>
+          <p class="subtitle">Como os pacientes disseram que conheceram a Dra. (pela pergunta no WhatsApp). <span class="q-refresh" id="srcRefresh">atualizar</span></p>
+        </div>
+        <div class="bd">
+          <div id="srcBody"><div class="q-empty">Carregando…</div></div>
         </div>
       </div>
 
@@ -810,6 +828,33 @@
 
     loadQueue();
     setInterval(() => { if (document.visibilityState === 'visible') loadQueue(); }, 30000);
+
+    // ============ PESQUISA DE ORIGEM ============
+    async function loadSourceStats() {
+      const card = document.getElementById('sourceCard');
+      const bodyEl = document.getElementById('srcBody');
+      try {
+        const d = await fetch('/api/source-stats').then(r => r.json());
+        card.style.display = 'block';
+        if (!d.answered) {
+          bodyEl.innerHTML = `<div class="q-empty">Ainda sem respostas. Os dados vão aparecendo conforme os pacientes respondem "como conheceu a Dra." no WhatsApp.</div>`;
+          return;
+        }
+        const rows = d.breakdown.map(b => {
+          const pct = Math.round((b.n / d.answered) * 100);
+          return `<div class="src-row">
+            <div class="src-top"><span class="src-name">${b.source}</span><span class="src-val">${pct}% · ${b.n}</span></div>
+            <div class="src-bar"><span style="width:${pct}%"></span></div>
+          </div>`;
+        }).join('');
+        bodyEl.innerHTML = rows + `<div class="src-total">${d.answered} responderam de ${d.engaged} que receberam o link${d.no_answer ? ` · ${d.no_answer} não responderam` : ''}.</div>`;
+      } catch (e) {
+        card.style.display = 'block';
+        bodyEl.innerHTML = '<div class="q-empty">Erro ao carregar as origens.</div>';
+      }
+    }
+    document.getElementById('srcRefresh').addEventListener('click', loadSourceStats);
+    loadSourceStats();
 
     // Carregar SheetJS via CDN
     const script = document.createElement('script');
